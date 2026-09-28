@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from app.ai import groq_client
 from app.ai.review_history import (
     ReviewHistory,
+    ai_style_problem,
     count_sentences,
     format_problems,
     history,
@@ -234,3 +235,26 @@ def test_rejected_invented_text_is_not_shown_back(monkeypatch):
     assert groq_client.generate_review(5, EXPERIENCE) == C
     assert invented not in fake.prompts[1]
     assert "which the customer did not mention" in fake.prompts[1]
+
+
+def test_ai_sounding_reviews_are_rejected():
+    assert ai_style_problem("The collection truly stood out. Quality was solid.", EXPERIENCE)
+    assert ai_style_problem("You know, the quality is nice. Liked it.", EXPERIENCE)
+    assert ai_style_problem("So, the collection was good. Nice quality.", EXPERIENCE)
+    assert ai_style_problem("Nice quality — liked the collection.", EXPERIENCE)
+    assert ai_style_problem("Good quality. I left feeling happy.", EXPERIENCE)
+    assert ai_style_problem("Really liked the collection. Quality was nice too.", EXPERIENCE) is None
+    assert ai_style_problem("Truly lovely collection. Good quality.", "truly lovely collection") is None
+
+
+def test_typography_is_made_plain_and_examples_not_copied(monkeypatch):
+    use_fake(
+        monkeypatch,
+        [
+            groq_client.EXAMPLE_REVIEWS[0],
+            "Nice quality and a well\u2011made collection. Glad I\u2019ve seen it.",
+        ],
+    )
+    assert groq_client.generate_review(5, EXPERIENCE) == (
+        "Nice quality and a well-made collection. Glad I've seen it."
+    )

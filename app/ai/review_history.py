@@ -44,8 +44,9 @@ RELATED_INPUT_TOKENS = 0.50
 EDGE_WORDS = 3
 RECENT_EDGE_WINDOW = 5
 
-# The same first word may not open two of the most recent related reviews.
-RECENT_STARTER_WINDOW = 2
+# Two related reviews in a row may not start with the same word. A wider
+# window pushes the model toward odd, unnatural openers.
+RECENT_STARTER_WINDOW = 1
 
 MIN_SENTENCES = 2
 MAX_SENTENCES = 4
@@ -137,6 +138,25 @@ PROMOTIONAL_PHRASES = (
     r"unmatched", r"unbeatable", r"like no other",
 )
 
+# Wording that makes a review read as AI-written, rejected unless the
+# customer used it.
+AI_STYLE_PHRASES = (
+    r"truly", r"delight\w*", r"impeccabl\w*", r"curated", r"elevat\w*",
+    r"seamless\w*", r"testament", r"exquisite", r"meticulous\w*", r"spot on",
+    r"caught my eye", r"(?:strong|lasting) impression", r"attention to detail",
+    r"nothing short of", r"well crafted", r"effortless\w*", r"showcas\w*",
+    r"boasts?", r"a (?:real )?treat", r"gem", r"journey", r"thoughtful\w*",
+    r"genuinely", r"undeniabl\w*", r"remarkabl\w*", r"left (?:me )?feeling",
+    r"walked away", r"lineup", r"top tier", r"in every way", r"wholeheartedly",
+    r"a cut above", r"sheer", r"stellar", r"whether you", r"if you re looking",
+    r"can t wait", r"experience was nothing", r"felt instantly",
+)
+# Filler openings real customers rarely type but models love.
+FILLER_OPENERS = (
+    r"honestly", r"so", r"well", r"you know", r"wow", r"okay so", r"ok so",
+    r"let me", r"as someone", r"what a", r"if you", r"my reaction",
+)
+
 # Words that push a review's tone past its rating, unless the customer used
 # them. Keyed by the ratings they are checked for.
 TOO_POSITIVE_LOW = (
@@ -168,6 +188,8 @@ def _alternation(patterns: tuple[str, ...]) -> re.Pattern[str]:
 _TOPIC_RES = {topic: _alternation(p) for topic, p in UNGROUNDED_TOPICS.items()}
 _EXTRA_RES = {topic: _alternation(p) for topic, p in EXTRA_GROUNDING.items()}
 _PROMO_RES = [re.compile(r"\b" + p + r"\b") for p in PROMOTIONAL_PHRASES]
+_AI_STYLE_RES = [re.compile(r"\b" + p + r"\b") for p in AI_STYLE_PHRASES]
+_FILLER_OPENER_RE = re.compile(r"^(?:" + "|".join(FILLER_OPENERS) + r")\b")
 _TOO_POSITIVE_LOW_RE = _alternation(TOO_POSITIVE_LOW)
 _TOO_POSITIVE_MID_RE = _alternation(TOO_POSITIVE_MID)
 _TOO_NEGATIVE_HIGH_RE = _alternation(TOO_NEGATIVE_HIGH)
@@ -235,6 +257,26 @@ def promotional_phrases(review: str, experience: str | None) -> list[str]:
         if match and not pattern.search(experience_n):
             found.append(match.group(0))
     return found
+
+
+def ai_style_problem(review: str, experience: str | None) -> str | None:
+    """Reason the review reads as AI-written rather than typed by a customer,
+    else ``None``."""
+    review_n = normalize(review)
+    experience_n = normalize(experience or "")
+    if "\u2014" in review or ";" in review:
+        return "it used an em dash or semicolon, which reads as AI-written"
+    opener = _FILLER_OPENER_RE.match(review_n)
+    if opener:
+        return f"it opened with the filler '{opener.group(0)}'"
+    for pattern in _AI_STYLE_RES:
+        match = pattern.search(review_n)
+        if match and not pattern.search(experience_n):
+            return (
+                f"it used '{match.group(0)}', which sounds AI-written; use "
+                "plain everyday words"
+            )
+    return None
 
 
 def sentiment_problem(review: str, rating: int, experience: str | None) -> str | None:

@@ -16,6 +16,7 @@ import uuid
 from groq import Groq
 
 from app.ai.review_history import (
+    ai_style_problem,
     closing,
     format_problems,
     history,
@@ -66,20 +67,41 @@ TONE FOLLOWS THE RATING AND THE CUSTOMER'S WORDS
 - 5 stars: very positive and appreciative.
 - Never make an experience sound better or stronger than the customer put it.
 
-SOUND LIKE A CUSTOMER, NOT AN ADVERT
-- Plain, everyday words, the way people really write reviews on their phone. \
-Not a business owner, employee, marketer or AI.
+WRITE LIKE A REAL PERSON, NOT AN AI OR AN ADVERT
+- Write the way ordinary customers actually type a Google review on their \
+phone: simple, direct and a little informal, with short common words. It \
+should not read polished, literary or balanced like an essay. Plain is good: \
+"Really liked the collection." beats an elaborate sentence.
+- Not a business owner, employee, marketer or AI.
 - No promotional or inflated phrases such as highly recommended, must visit, \
 best boutique, best in town, exceptional service, premium quality, top-notch, \
 perfect place, absolutely amazing, luxury experience or hidden gem, unless the \
 customer expressed that themselves.
+- No AI-sounding words such as truly, delightful, impeccable, curated, \
+elevate, seamless, testament, exquisite, meticulous, spot-on, vibe, caught my \
+eye, left a lasting impression, attention to detail, nothing short of or \
+well-crafted.
+- Don't open with filler like "Honestly,", "So,", "Well,", "You know," or \
+"Wow,". Don't end with a neat wrap-up line like "I left feeling satisfied."
 - Keep it relevant to a boutique visit through the customer's own points. \
 Don't force boutique words into it.
 
 LENGTH AND FORMAT
 - 2-4 short, conversational sentences. No filler just to add length.
+- Use plain keyboard punctuation: no em dashes, no semicolons.
 - Return only the review text: no preamble, heading, quotation marks, \
 hashtags, emojis, bullet points or JSON.
+
+HOW REAL REVIEWS READ (tone reference only; never reuse these sentences)
+- 5 stars, "Beautiful collection and really good quality." -> The collection \
+was lovely and the quality was really good. Very happy with what I found.
+- 4 stars, "The outfit looked good but delivery took longer than expected." \
+-> Liked how the outfit turned out. Only thing is the delivery took longer \
+than I expected.
+- 3 stars, "The collection was okay but I didn't find much variety." -> \
+Collection was okay but there wasn't much variety. Pretty average for me.
+- 2 stars, "The fitting was not right and I had to get it changed." -> The \
+fitting wasn't right so I had to get it changed. Bit disappointing.
 
 EVERY REVIEW IS NEW
 - Many customers give similar input, so vary the opening, sentence structure, \
@@ -104,10 +126,9 @@ the review.
 ANGLES = (
     "Start with the first thing the customer mentioned.",
     "Start with the last thing the customer mentioned, then the rest.",
-    "Start with how the customer felt, then say why in their terms.",
-    "Fit the customer's points into one sentence, then add a short reaction.",
-    "Keep every sentence short and plain, like a quick note typed on a phone.",
-    "Write it the way someone tells a friend about it: relaxed and casual.",
+    "Start with how the customer felt, then say why in simple words.",
+    "Fit the customer's points into one sentence, then add a short personal reaction.",
+    "Keep it very plain and brief, like a quick review typed on a phone.",
 )
 
 # Picked per request so reviews are tied to the boutique without every one
@@ -131,11 +152,22 @@ STOCK_CLOSINGS = (
 
 # Used for the last attempts, to push for a new shape.
 RESCUE_INSTRUCTIONS = (
-    "Use a noticeably different voice from every earlier review: short, "
-    "casual sentences, as if texting a friend.",
-    "Use a noticeably different voice from every earlier review: calm and "
+    "Use a noticeably different voice from every earlier review: plainer and "
+    "shorter, with a different first word and a different last sentence.",
+    "Use a noticeably different voice from every earlier review: "
     "matter-of-fact, mentioning the customer's points in reverse order.",
 )
+
+# The prompt's tone-reference outputs; a review must not copy one of them.
+EXAMPLE_REVIEWS = (
+    "The collection was lovely and the quality was really good. Very happy with what I found.",
+    "Liked how the outfit turned out. Only thing is the delivery took longer than I expected.",
+    "Collection was okay but there wasn't much variety. Pretty average for me.",
+    "The fitting wasn't right so I had to get it changed. Bit disappointing.",
+)
+
+# Typography people don't type on a phone keyboard, swapped for what they do.
+_PLAIN_TYPOGRAPHY = str.maketrans({"‐": "-", "‑": "-", "‘": "'", "’": "'"})
 
 MAX_ATTEMPTS = 5  # the first try plus up to 4 regenerations
 MAX_PREVIOUS_IN_PROMPT = 5
@@ -247,21 +279,28 @@ def _rejection(
     promo = promotional_phrases(review, experience)
     if promo:
         return INVALID, f"it used promotional wording ('{promo[0]}') the customer never used"
+    style = ai_style_problem(review, experience)
+    if style:
+        return INVALID, style
     tone = sentiment_problem(review, rating, experience)
     if tone:
         return INVALID, tone
     problems = format_problems(review)
     if problems:
         return INVALID, problems[0]
-    similar = history.too_similar(review, extra=rejected) or history.reused_sentence(key, review)
+    similar = (
+        history.too_similar(review, extra=[*rejected, *EXAMPLE_REVIEWS])
+        or history.reused_sentence(key, review)
+    )
     return SIMILAR, similar
 
 
 def _sentence_target(experience: str | None) -> str:
     """A per-request sentence count, so lengths vary without padding short input."""
     words = len((experience or "").split())
-    options = ["2", "3"] + (["4"] if words >= 15 else [])
-    return random.choice(options)
+    if words < 8:
+        return random.choice(("2", "2", "3"))
+    return random.choice(("2", "3", "4") if words >= 15 else ("2", "3"))
 
 
 def _build_user_prompt(
@@ -356,7 +395,7 @@ def _complete(client: Groq, prompt: str, *, temperature: float) -> str:
         logger.error("Groq review generation failed: %s", exc)
         raise GroqError(f"Review generation failed: {exc}") from exc
 
-    review = (response.choices[0].message.content or "").strip()
+    review = (response.choices[0].message.content or "").strip().translate(_PLAIN_TYPOGRAPHY)
     if not review:
         logger.error("Groq returned an empty review")
         raise GroqError("Groq returned an empty review. Please try again.")
