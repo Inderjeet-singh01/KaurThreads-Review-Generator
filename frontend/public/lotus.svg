@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 56" fill="none" role="img" aria-label="Lotus">
+  <g stroke="#c9a24a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <!-- centre petal -->
+    <path d="M36 8c-4 6-4 16 0 24 4-8 4-18 0-24z" />
+    <!-- inner side petals -->
+    <path d="M36 32c-6-3-11-9-13-17 7 1 12 6 13 13" />
+    <path d="M36 32c6-3 11-9 13-17-7 1-12 6-13 13" />
+    <!-- outer side petals -->
+    <path d="M36 32c-8 1-16-1-22-6 6-3 14-2 20 2" />
+    <path d="M36 32c8 1 16-1 22-6-6-3-14-2-20 2" />
+    <!-- base -->
+    <path d="M14 30c6 8 14 12 22 12s16-4 22-12" />
+  </g>
+</svg>
