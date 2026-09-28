@@ -108,7 +108,7 @@ cp .env.example .env   # set VITE_API_BASE_URL and VITE_GOOGLE_REVIEW_URL
 npm run dev            # http://localhost:5173
 ```
 
-It calls `POST /generate-review` at `VITE_API_BASE_URL` and opens
-`VITE_GOOGLE_REVIEW_URL` for the customer to submit on Google. It never posts to
-Google itself. The dev server origins (`5173`/`4173`) are already in the backend
-`CORS_ALLOW_ORIGINS` default. See [`frontend/README.md`](frontend/README.md).
+It calls `POST /generate-review` at `VITE_API_BASE_URL`. **Post on Google**
+copies the review and opens `VITE_GOOGLE_REVIEW_URL` so the customer can paste
+and submit it on Google. It never posts to Google itself. The dev server
+origins (`5173`/`4173`) are already in the backend `CORS_ALLOW_ORIGINS` default. See [`frontend/README.md`](frontend/README.md).
