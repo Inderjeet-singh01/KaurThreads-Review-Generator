@@ -69,7 +69,7 @@ ABSOLUTE RULES:
 10. Write naturally as a real customer.
 11. Do not use marketing language, slogans, hashtags, emojis, headings,
     or quotation marks.
-12. Keep the review to 1-3 natural sentences.
+12. Keep the review to 2-4 natural sentences.
 13. Return ONLY the review text.
 
 VARIATION REQUIREMENTS:
