@@ -1,5 +1,10 @@
 # Kaur Threads Boutique — AI Review Generator
 
+## Live deployment
+
+- **Frontend:** https://kaurthreads-review-generator.onrender.com/
+- **Backend:** https://kaurthreads-ai-review-generator.onrender.com/
+
 A minimal FastAPI backend that generates a natural-sounding Google review draft
 from a star rating and an optional customer experience. The generated text is
 only a **draft** for the customer to edit and post themselves.
