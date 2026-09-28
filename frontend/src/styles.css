@@ -810,6 +810,26 @@ img {
   color: var(--muted);
 }
 
+.post-status:not(:empty) {
+  margin: 12px 0 0;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(18, 61, 53, 0.06);
+  border: 1px solid rgba(18, 61, 53, 0.2);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.post-status__title {
+  margin: 0 0 2px;
+  color: var(--green);
+  font-weight: 600;
+}
+
+.post-status__text {
+  margin: 0;
+}
+
 /* -------------------------------------------------- Trust / process row */
 .feature-strip {
   list-style: none;

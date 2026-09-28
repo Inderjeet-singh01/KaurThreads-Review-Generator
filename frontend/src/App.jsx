@@ -7,10 +7,12 @@ import GeneratedReview from './components/GeneratedReview.jsx'
 import FeatureStrip from './components/FeatureStrip.jsx'
 import ClosingSection from './components/ClosingSection.jsx'
 import Footer from './components/Footer.jsx'
-import { generateReview, GENERIC_ERROR, GOOGLE_MAPS_URL } from './api.js'
+import { generateReview, GENERIC_ERROR, GOOGLE_REVIEW_URL } from './api.js'
 
 const NO_RATING_ERROR = 'Please select a rating first.'
-const EMPTY_REVIEW_ERROR = 'Please generate or write your review before posting on Google.'
+const EMPTY_REVIEW_ERROR = 'Please generate or write your review first.'
+// Long enough for the customer to see the copy confirmation before Google opens.
+const REDIRECT_DELAY_MS = 700
 
 export default function App() {
   const [rating, setRating] = useState(0)
@@ -19,9 +21,9 @@ export default function App() {
   const [phase, setPhase] = useState('form') // 'form' | 'result'
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [postMessage, setPostMessage] = useState('') // Post on Google status
+  const [postStatus, setPostStatus] = useState(null) // 'copied' | 'manual' | null
 
-  const googleConfigured = Boolean(GOOGLE_MAPS_URL)
+  const googleConfigured = Boolean(GOOGLE_REVIEW_URL)
 
   async function runGenerate() {
     if (!rating) {
@@ -29,7 +31,7 @@ export default function App() {
       return
     }
     setError('')
-    setPostMessage('')
+    setPostStatus(null)
     setLoading(true)
     try {
       const text = await generateReview({ rating, experience })
@@ -55,34 +57,34 @@ export default function App() {
   async function handlePostGoogle() {
     const text = review.trim() // current (possibly edited) review
     if (!text) {
-      setPostMessage('')
+      setPostStatus(null)
       setError(EMPTY_REVIEW_ERROR)
       return
     }
     if (!googleConfigured) return
     setError('')
 
-    // Google can't be pre-filled, so copy the text for the customer to paste.
-    // Best-effort — never block opening Google Maps.
+    // Google's review box can't be pre-filled, so copy the text for the
+    // customer to paste. Best-effort — never block opening Google.
     try {
       await navigator.clipboard.writeText(text)
-      setPostMessage(
-        'Your review has been copied. Open Google Maps and paste it into your review.'
-      )
+      setPostStatus('copied')
     } catch (err) {
       console.warn('Could not copy review to clipboard:', err)
-      setPostMessage('Google Maps is opening. Please copy your review manually.')
+      setPostStatus('manual')
     }
 
-    // Same-tab navigation (no popup) so the OS/browser can hand the Universal
-    // URL to the Google Maps app when installed, or open it on the web.
-    window.location.href = GOOGLE_MAPS_URL
+    // Let the confirmation render before leaving the page. Same-tab
+    // navigation, so no popup blocker is involved.
+    setTimeout(() => {
+      window.location.href = GOOGLE_REVIEW_URL
+    }, REDIRECT_DELAY_MS)
   }
 
   function handleBack() {
     setPhase('form')
     setError('')
-    setPostMessage('')
+    setPostStatus(null)
   }
 
   return (
@@ -113,7 +115,7 @@ export default function App() {
               onBack={handleBack}
               loading={loading}
               error={error}
-              postMessage={postMessage}
+              postStatus={postStatus}
               googleConfigured={googleConfigured}
             />
           )}

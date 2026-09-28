@@ -26,8 +26,7 @@ Both are **required** and must never be hardcoded in source.
 | Variable                 | Description                                                                 |
 | ------------------------ | --------------------------------------------------------------------------- |
 | `VITE_API_BASE_URL`      | Base URL of the FastAPI backend (no trailing slash), e.g. `http://127.0.0.1:8000`. |
-| `VITE_GOOGLE_MAPS_URL`   | Google Maps Universal URL for the listing. Defaults to `https://www.google.com/maps/search/?api=1&query=Kaur+Threads+Boutique&query_place_id=ChIJXfSGFKDvDzkRaANBXxmg1Z8`. |
-| `VITE_GOOGLE_REVIEW_URL` | Legacy, kept for backward compatibility. Not used by **Post on Google**. |
+| `VITE_GOOGLE_REVIEW_URL` | Google "write a review" link, e.g. `https://search.google.com/local/writereview?placeid=ChIJXfSGFKDvDzkRaANBXxmg1Z8`. |
 
 ## How it connects to the backend
 
@@ -37,10 +36,9 @@ Both are **required** and must never be hardcoded in source.
 - Handles loading, network/timeout (20s abort), non-2xx, and invalid responses
   with a single customer-safe message — backend error details are never shown.
 - **Post on Google** copies the current (edited) text to the clipboard (best
-  effort) and opens `VITE_GOOGLE_MAPS_URL` in the same tab, so on mobile the
-  OS/browser can hand it to the Google Maps app. The customer pastes and
-  submits the review on Google; the app never posts to Google and adds no
-  backend route.
+  effort), shows a confirmation, and ~700ms later opens `VITE_GOOGLE_REVIEW_URL`
+  in the same tab. The customer pastes and submits the review on Google; the
+  app never posts to Google and adds no backend route.
 
 ## Adding a real boutique photo
 

@@ -8,7 +8,7 @@ export default function GeneratedReview({
   onBack,
   loading,
   error,
-  postMessage,
+  postStatus,
   googleConfigured,
 }) {
   return (
@@ -69,8 +69,8 @@ export default function GeneratedReview({
           disabled={loading || !googleConfigured}
           title={
             googleConfigured
-              ? 'Copy your review and open Google Maps'
-              : 'Google Maps link is not configured yet'
+              ? 'Copy your review and open Google'
+              : 'Google review link is not configured yet'
           }
         >
           <GoogleIcon width="20" height="20" />
@@ -78,15 +78,26 @@ export default function GeneratedReview({
         </button>
       </div>
 
-      {postMessage && (
-        <p className="form-note" role="status">
-          {postMessage}
-        </p>
-      )}
+      <div className="post-status" role="status" aria-live="polite">
+        {postStatus === 'copied' && (
+          <>
+            <p className="post-status__title">
+              <span aria-hidden="true">✓</span> Your review has been copied!
+            </p>
+            <p className="post-status__text">Google is opening...</p>
+            <p className="post-status__text">Tap the review box and paste your review.</p>
+          </>
+        )}
+        {postStatus === 'manual' && (
+          <p className="post-status__text">
+            Google is opening. Please copy your review manually if needed.
+          </p>
+        )}
+      </div>
 
       {!googleConfigured && (
         <p className="form-note" role="note">
-          The Google Maps link isn’t configured yet. Set VITE_GOOGLE_MAPS_URL
+          The Google review link isn’t configured yet. Set VITE_GOOGLE_REVIEW_URL
           to enable posting.
         </p>
       )}
