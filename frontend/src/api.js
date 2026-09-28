@@ -69,4 +69,16 @@ export async function generateReview({ rating, experience, timeoutMs = 20000 }) 
   return data.review.trim()
 }
 
+// Kept for backward compatibility only — NOT used by "Post on Google".
 export const GOOGLE_REVIEW_URL = import.meta.env.VITE_GOOGLE_REVIEW_URL || ''
+
+// Official Google Maps Universal URL for the boutique's listing. On mobile the
+// OS/browser decides whether to hand it to the Google Maps app or open it on
+// the web. It is public, so a default is safe to ship.
+const DEFAULT_GOOGLE_MAPS_URL =
+  'https://www.google.com/maps/search/?api=1' +
+  '&query=Kaur+Threads+Boutique' +
+  '&query_place_id=ChIJXfSGFKDvDzkRaANBXxmg1Z8'
+
+export const GOOGLE_MAPS_URL =
+  import.meta.env.VITE_GOOGLE_MAPS_URL || DEFAULT_GOOGLE_MAPS_URL

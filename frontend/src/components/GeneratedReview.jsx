@@ -8,21 +8,9 @@ export default function GeneratedReview({
   onBack,
   loading,
   error,
+  postMessage,
   googleConfigured,
 }) {
-  async function handlePost() {
-    // Copy the edited text so the customer can paste it on Google (Google's
-    // page cannot be pre-filled). Best-effort — never block the redirect.
-    try {
-      if (navigator.clipboard && review.trim()) {
-        await navigator.clipboard.writeText(review.trim())
-      }
-    } catch {
-      /* clipboard unavailable — the customer can still copy manually */
-    }
-    onPostGoogle()
-  }
-
   return (
     <div className="generated">
       <div className="generated__head">
@@ -77,12 +65,12 @@ export default function GeneratedReview({
         <button
           type="button"
           className="btn btn--primary"
-          onClick={handlePost}
+          onClick={onPostGoogle}
           disabled={loading || !googleConfigured}
           title={
             googleConfigured
-              ? 'Copy your review and open Google'
-              : 'Google review link is not configured yet'
+              ? 'Copy your review and open Google Maps'
+              : 'Google Maps link is not configured yet'
           }
         >
           <GoogleIcon width="20" height="20" />
@@ -90,9 +78,15 @@ export default function GeneratedReview({
         </button>
       </div>
 
+      {postMessage && (
+        <p className="form-note" role="status">
+          {postMessage}
+        </p>
+      )}
+
       {!googleConfigured && (
         <p className="form-note" role="note">
-          The Google review link isn’t configured yet. Set VITE_GOOGLE_REVIEW_URL
+          The Google Maps link isn’t configured yet. Set VITE_GOOGLE_MAPS_URL
           to enable posting.
         </p>
       )}
