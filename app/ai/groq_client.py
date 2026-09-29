@@ -36,88 +36,52 @@ class GroqError(Exception):
 
 
 SYSTEM_PROMPT = """\
-You write one Google review in the voice of a real customer of Kaur Threads \
-Boutique, a fashion boutique.
+You write one Google review as a real customer of Kaur Threads Boutique, a \
+fashion boutique.
 
-THE CUSTOMER'S WORDS ARE THE ONLY SOURCE OF TRUTH
-- You get a star rating and the customer's experience in their own words. Use \
-only these.
-- Every fact in the review must come from the experience. Anything they did \
-not say is unknown, so leave it out. Never fill gaps with what boutiques \
-usually offer.
-- A boutique experience can be about products (outfits, the collection, \
-designs, fabric, quality, variety, colours, fitting, how an item looked), \
-service (staff help, design guidance, stitching, alterations, customization, \
-measurements, communication, order handling, delivery), or both. These are \
-only kinds of experience a customer might describe, not things this boutique \
-is known to offer. Mention one only if the customer did.
-- Do not add staff, stylists, prices, offers, fabrics, brands, specific \
-garments, colours, occasions, the shop's look or atmosphere, new arrivals, how \
-big the collection is, delivery details, reasons for a problem, purchases, \
-trying things on, return visits or recommendations unless the customer said so.
-- Rephrase, never embellish. "Staff helped me choose the design and the outfit \
-looked beautiful" may become "The staff was helpful in choosing the design, \
-and I really liked how the outfit looked." It must never become "Their \
-stylists helped me choose from a wide collection of designer outfits."
+FACTS: use only the customer's rating and experience.
+- Every fact must come from the experience. Anything not said is unknown: \
+leave it out. Never fill gaps with what boutiques usually offer.
+- A customer may talk about products (outfits, collection, designs, fabric, \
+quality, variety, colours, fitting) and/or service (staff help, stitching, \
+alterations, customization, measurements, communication, orders, delivery). \
+These are possible topics, not facts about this boutique. Mention one only if \
+the customer did.
+- Never add staff, stylists, prices, offers, fabrics, brands, garments, \
+occasions, the shop's look, new arrivals, a "wide" range, delivery details, \
+reasons for a problem, purchases, trying on, coming back or recommending.
+- Rephrase, never embellish. "Staff helped me choose the design" can become \
+"The staff was helpful when I was choosing a design", never "Their stylists \
+guided me through a wide range of designer outfits".
 
-TONE FOLLOWS THE RATING AND THE CUSTOMER'S WORDS
-- 1-2 stars: clearly unhappy about the problems they described, but civil.
-- 3 stars: mixed, neutral or so-so. Do not turn it positive.
-- 4 stars: clearly positive and satisfied.
-- 5 stars: very positive and appreciative.
-- Never make an experience sound better or stronger than the customer put it.
+TONE: 1-2 stars unhappy but civil; 3 stars mixed or so-so, not positive; \
+4 stars clearly satisfied; 5 stars very positive. Never make it sound better \
+or stronger than the customer put it.
 
-WRITE LIKE A REAL PERSON, NOT AN AI OR AN ADVERT
-- Write the way ordinary customers actually type a Google review on their \
-phone: simple, direct and a little informal, with short common words. It \
-should not read polished, literary or balanced like an essay. Plain is good: \
-"Really liked the collection." beats an elaborate sentence.
-- Not a business owner, employee, marketer or AI.
-- No promotional or inflated phrases such as highly recommended, must visit, \
-best boutique, best in town, exceptional service, premium quality, top-notch, \
-perfect place, absolutely amazing, luxury experience or hidden gem, unless the \
-customer expressed that themselves.
-- No AI-sounding words such as truly, delightful, impeccable, curated, \
-elevate, seamless, testament, exquisite, meticulous, spot-on, vibe, caught my \
-eye, left a lasting impression, attention to detail, nothing short of or \
-well-crafted.
-- Don't open with filler like "Honestly,", "So,", "Well,", "You know," or \
-"Wow,". Don't end with a neat wrap-up line like "I left feeling satisfied."
-- Keep it relevant to a boutique visit through the customer's own points. \
-Don't force boutique words into it.
+VOICE: write like an ordinary customer typing on their phone. Simple, direct, \
+a little informal, short common words. Not polished, literary, promotional or \
+AI-like. No "highly recommended", "must visit", "best in town", "top-notch", \
+"premium", "exceptional", "absolutely amazing", "truly", "delightful", \
+"curated", "impeccable", "spot-on", "vibe", "caught my eye", "left me \
+feeling" and the like. No filler openers ("Honestly,", "So,", "Well,", "You \
+know,") and no neat wrap-up line at the end.
 
-LENGTH AND FORMAT
-- 2-4 short, conversational sentences. No filler just to add length.
-- Use plain keyboard punctuation: no em dashes, no semicolons.
-- Return only the review text: no preamble, heading, quotation marks, \
-hashtags, emojis, bullet points or JSON.
-
-HOW REAL REVIEWS READ (tone reference only; never reuse these sentences)
+Examples of the right voice (never reuse these sentences):
 - 5 stars, "Beautiful collection and really good quality." -> The collection \
 was lovely and the quality was really good. Very happy with what I found.
-- 4 stars, "The outfit looked good but delivery took longer than expected." \
--> Liked how the outfit turned out. Only thing is the delivery took longer \
-than I expected.
 - 3 stars, "The collection was okay but I didn't find much variety." -> \
 Collection was okay but there wasn't much variety. Pretty average for me.
 - 2 stars, "The fitting was not right and I had to get it changed." -> The \
 fitting wasn't right so I had to get it changed. Bit disappointing.
 
-EVERY REVIEW IS NEW
-- Many customers give similar input, so vary the opening, sentence structure, \
-vocabulary, order of ideas, sentence length and how the feeling is expressed.
-- Avoid stock lines like "I had a great experience at...", "Overall, it was a \
-great experience.", "I would definitely recommend..." or "Great experience \
-overall." Don't default to opening with "I", "The" or "Overall".
-- Don't just repeat the customer's sentence back word for word.
-- Variation changes the wording, never the facts. Never add a detail to make a \
-review different.
+VARIETY: many customers write similar things, so vary the opening, sentence \
+structure, word choice, order of ideas and length. Avoid stock lines like "I \
+had a great experience", "Overall, it was a great experience" or "I would \
+definitely recommend". Don't just echo the customer's sentence. Variation \
+changes wording, never facts.
 
-Before answering, check silently: every claim is backed by the experience; no \
-product, service, staff, price, fabric, design, brand or delivery detail was \
-added; the tone is not exaggerated; it is 2-4 short sentences; it is clearly \
-different from any PREVIOUS_REVIEWS. Fix anything that fails, then output only \
-the review.
+FORMAT: 2-4 short sentences. Plain punctuation: no em dashes, semicolons, \
+quotation marks, hashtags, emojis, bullets or headings. Output only the review.
 """
 
 
@@ -161,7 +125,6 @@ RESCUE_INSTRUCTIONS = (
 # The prompt's tone-reference outputs; a review must not copy one of them.
 EXAMPLE_REVIEWS = (
     "The collection was lovely and the quality was really good. Very happy with what I found.",
-    "Liked how the outfit turned out. Only thing is the delivery took longer than I expected.",
     "Collection was okay but there wasn't much variety. Pretty average for me.",
     "The fitting wasn't right so I had to get it changed. Bit disappointing.",
 )
@@ -169,16 +132,27 @@ EXAMPLE_REVIEWS = (
 # Typography people don't type on a phone keyboard, swapped for what they do.
 _PLAIN_TYPOGRAPHY = str.maketrans({"‐": "-", "‑": "-", "‘": "'", "’": "'"})
 
-MAX_ATTEMPTS = 5  # the first try plus up to 4 regenerations
-MAX_PREVIOUS_IN_PROMPT = 5
+MAX_ATTEMPTS = 4  # the first try plus up to 3 regenerations
+MAX_PREVIOUS_IN_PROMPT = 4
 BASE_TEMPERATURE = 0.8
-# No new attempt starts after this, so a response arrives well within the
-# frontend's 20s request timeout.
-GENERATION_BUDGET_SECONDS = 8.0
 
-# Rejection kinds. Only "similar" candidates are shown back to the model as
-# contrast; the others contain content it should not see again.
-SIMILAR, INVALID = "similar", "invalid"
+# Timing. The frontend aborts after 20s, so every request finishes by
+# DEADLINE_SECONDS: each call's timeout is clipped to the time left, and no
+# new attempt starts without MIN_CALL_SECONDS to spare. Once a usable
+# fallback exists, no retry starts after SETTLE_SECONDS, to keep it quick.
+DEADLINE_SECONDS = 15.0
+CALL_TIMEOUT_SECONDS = 7.0
+MIN_CALL_SECONDS = 3.0
+SETTLE_SECONDS = 6.0
+
+# Rejection kinds, in the order a candidate is preferred as a fallback when
+# no attempt passes every check. UNGROUNDED (invented facts) and DUPLICATE
+# (identical to a past review) candidates are never returned. Only
+# EDGE/SIMILAR candidates are shown back to the model as contrast; the others
+# contain content it should not see again (or already sees).
+EDGE, SIMILAR, STYLE = "edge", "similar", "style"
+UNGROUNDED, DUPLICATE = "ungrounded", "duplicate"
+_FALLBACK_RANK = {EDGE: 0, SIMILAR: 1, STYLE: 2}
 
 
 def generate_review(rating: int, experience: str | None) -> str:
@@ -186,11 +160,15 @@ def generate_review(rating: int, experience: str | None) -> str:
 
     Every call makes a fresh generation; nothing is cached. Each candidate is
     checked and regenerated (with feedback) if it mentions things the customer
-    never did, sounds promotional, overshoots the rating, breaks the format
-    rules, or is identical or too similar to a previous review (as a whole or
+    never did, sounds promotional or AI-written, overshoots the rating, breaks
+    the format rules, or is too similar to a previous review (as a whole or
     sentence by sentence), including reviews written for similar inputs.
-    ``experience`` may be ``None``. Raises :class:`GroqError` on
-    configuration/API failure or if no acceptable review could be produced.
+
+    If no attempt passes every check before the deadline, or Groq fails on a
+    retry, the best grounded candidate that is not an exact duplicate is
+    returned instead of an error. ``experience`` may be ``None``. Raises
+    :class:`GroqError` on configuration/API failure or if no usable review
+    could be produced.
     """
     if not settings.groq_api_key:
         raise GroqError(
@@ -201,20 +179,24 @@ def generate_review(rating: int, experience: str | None) -> str:
     request_id = uuid.uuid4().hex[:12]
     key = input_key(rating, experience)
     previous = history.recent_for(key, MAX_PREVIOUS_IN_PROMPT)
-    client = Groq(api_key=settings.groq_api_key, timeout=8.0, max_retries=1)
+    # Retries are handled here, within the deadline, not by the SDK.
+    client = Groq(api_key=settings.groq_api_key, max_retries=0)
     started = time.monotonic()
 
     rejected: list[str] = []  # this request's rejected candidates
     contrast: list[str] = []  # rejected candidates safe to show the model
+    fallbacks: list[tuple[int, int, str]] = []  # (rank, attempt, text)
     last_rejection: tuple[str, str] | None = None  # (kind, reason)
-    fallback: str | None = None  # unique, but its opening/closing echoed a recent one
+    last_error: GroqError | None = None
     angles = random.sample(ANGLES, len(ANGLES))
     naming = random.choice(NAMING)
     sentences = _sentence_target(experience)
     first_rescue = MAX_ATTEMPTS - len(RESCUE_INSTRUCTIONS)
 
     for attempt in range(MAX_ATTEMPTS):
-        if attempt and time.monotonic() - started > GENERATION_BUDGET_SECONDS:
+        elapsed = time.monotonic() - started
+        remaining = DEADLINE_SECONDS - elapsed
+        if attempt and (remaining < MIN_CALL_SECONDS or (fallbacks and elapsed > SETTLE_SECONDS)):
             logger.warning("Time budget reached (request=%s)", request_id)
             break
         prompt = _build_user_prompt(
@@ -229,19 +211,27 @@ def generate_review(rating: int, experience: str | None) -> str:
             rescue=RESCUE_INSTRUCTIONS[attempt - first_rescue] if attempt >= first_rescue else None,
         )
         temperature = min(BASE_TEMPERATURE + 0.05 * attempt, 1.0)
-        review = _complete(client, prompt, temperature=temperature)
+        try:
+            review = _complete(
+                client,
+                prompt,
+                temperature=temperature,
+                timeout=min(CALL_TIMEOUT_SECONDS, remaining),
+            )
+        except GroqError as exc:
+            # A rate limit or timeout on a retry shouldn't fail the customer
+            # when a usable candidate already exists.
+            last_error = exc
+            if fallbacks:
+                break
+            continue
 
         kind, reason = _rejection(review, rating, experience, key, rejected)
         if reason is None:
-            soft = history.repeated_edges(key, review)
-            if soft is None:
-                if history.add_if_unique(key, review):
-                    _log_success(request_id, rating, attempt, review)
-                    return review
-                kind, reason = SIMILAR, "it matched a review that was just generated"
-            else:
-                kind, reason = SIMILAR, soft
-                fallback = fallback or review
+            if history.add_if_unique(key, review):
+                _log_success(request_id, rating, attempt, review)
+                return review
+            kind, reason = SIMILAR, "it matched a review that was just generated"
 
         logger.info(
             "Review rejected (request=%s, attempt=%d): %s",
@@ -249,17 +239,23 @@ def generate_review(rating: int, experience: str | None) -> str:
         )
         logger.debug("Rejected text (request=%s): %s", request_id, review)
         rejected.append(review)
-        if kind == SIMILAR:  # never feed invented or off-tone text back
+        if kind in _FALLBACK_RANK:
+            fallbacks.append((_FALLBACK_RANK[kind], attempt, review))
+        if kind in (EDGE, SIMILAR):  # never feed invented or off-tone text back
             contrast.append(review)
         last_rejection = (kind, reason)
 
-    # Every attempt echoed a recent opening/closing at best: return one that
-    # is still unique rather than failing the customer.
-    if fallback and history.add_if_unique(key, fallback):
-        _log_success(request_id, rating, attempt, fallback)
-        return fallback
+    # Nothing passed every check: return the best grounded candidate that is
+    # not an exact duplicate, rather than failing the customer.
+    for _, attempt, review in sorted(fallbacks):
+        if history.add_if_unique(key, review, allow_similar=True):
+            logger.warning("Returning best fallback candidate (request=%s)", request_id)
+            _log_success(request_id, rating, attempt, review)
+            return review
 
-    logger.error("No acceptable review after %d attempts (request=%s)", attempt + 1, request_id)
+    logger.error("No usable review (request=%s)", request_id)
+    if last_error and not fallbacks:
+        raise last_error
     raise GroqError("Could not generate a unique review. Please try again.")
 
 
@@ -270,29 +266,33 @@ def _rejection(
     key: tuple[int, str],
     rejected: list[str],
 ) -> tuple[str, str | None]:
-    """(kind, reason) a candidate can never be returned, or (kind, None)."""
+    """(kind, reason) the candidate was rejected, or (kind, None) if it passes."""
     topics = ungrounded_topics(review, experience)
     if topics:
-        return INVALID, (
+        return UNGROUNDED, (
             "it mentioned " + ", ".join(topics) + ", which the customer did not mention"
         )
+    if history.is_duplicate(review):
+        return DUPLICATE, "it was identical to a previous review"
     promo = promotional_phrases(review, experience)
     if promo:
-        return INVALID, f"it used promotional wording ('{promo[0]}') the customer never used"
+        return STYLE, f"it used promotional wording ('{promo[0]}') the customer never used"
     style = ai_style_problem(review, experience)
     if style:
-        return INVALID, style
+        return STYLE, style
     tone = sentiment_problem(review, rating, experience)
     if tone:
-        return INVALID, tone
+        return STYLE, tone
     problems = format_problems(review)
     if problems:
-        return INVALID, problems[0]
+        return STYLE, problems[0]
     similar = (
         history.too_similar(review, extra=[*rejected, *EXAMPLE_REVIEWS])
         or history.reused_sentence(key, review)
     )
-    return SIMILAR, similar
+    if similar:
+        return SIMILAR, similar
+    return EDGE, history.repeated_edges(key, review)
 
 
 def _sentence_target(experience: str | None) -> str:
@@ -341,7 +341,7 @@ def _build_user_prompt(
         ]
     if last_rejection:
         kind, reason = last_rejection
-        if kind == SIMILAR:
+        if kind in (EDGE, SIMILAR, DUPLICATE):
             lines += [
                 "",
                 f"Your last attempt was rejected as too similar to a previous "
@@ -377,7 +377,7 @@ def _avoid_closings(previous: list[str]) -> list[str]:
     return list(dict.fromkeys([*STOCK_CLOSINGS, *recent]))
 
 
-def _complete(client: Groq, prompt: str, *, temperature: float) -> str:
+def _complete(client: Groq, prompt: str, *, temperature: float, timeout: float) -> str:
     try:
         response = client.chat.completions.create(
             model=settings.groq_model,
@@ -390,6 +390,7 @@ def _complete(client: Groq, prompt: str, *, temperature: float) -> str:
             # openai/gpt-oss models are reasoning models; keep reasoning short
             # so the token budget is spent on the review, not deliberation.
             reasoning_effort="low",
+            timeout=timeout,
         )
     except Exception as exc:  # noqa: BLE001 - surfaced as a clean HTTP error
         logger.error("Groq review generation failed: %s", exc)

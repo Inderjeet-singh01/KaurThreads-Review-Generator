@@ -34,11 +34,15 @@ class FakeGroq:
     def __init__(self, replies):
         self.replies = list(replies)
         self.prompts: list[str] = []
+        self.timeouts: list[float] = []
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
 
-    def _create(self, *, messages, **_):
+    def _create(self, *, messages, timeout=None, **_):
         self.prompts.append(messages[-1]["content"])
+        self.timeouts.append(timeout)
         text = self.replies.pop(0)
+        if isinstance(text, Exception):
+            raise text
         return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=text))])
 
 
@@ -258,3 +262,38 @@ def test_typography_is_made_plain_and_examples_not_copied(monkeypatch):
     assert groq_client.generate_review(5, EXPERIENCE) == (
         "Nice quality and a well-made collection. Glad I've seen it."
     )
+
+
+AI_ISH = "Wow, the collection was so good. Quality was nice too."  # filler opener
+
+
+def test_best_fallback_returned_instead_of_error(monkeypatch):
+    fake = use_fake(monkeypatch, [AI_ISH] * groq_client.MAX_ATTEMPTS)
+    assert groq_client.generate_review(5, EXPERIENCE) == AI_ISH
+    assert len(fake.prompts) == groq_client.MAX_ATTEMPTS
+
+
+def test_api_error_on_retry_returns_fallback(monkeypatch):
+    use_fake(monkeypatch, [AI_ISH, RuntimeError("429 rate limit")])
+    assert groq_client.generate_review(5, EXPERIENCE) == AI_ISH
+
+
+def test_api_error_on_first_try_is_retried(monkeypatch):
+    use_fake(monkeypatch, [RuntimeError("timeout"), C])
+    assert groq_client.generate_review(5, EXPERIENCE) == C
+
+
+def test_invented_facts_are_never_returned(monkeypatch):
+    invented = "The staff were lovely. Quality was nice too."
+    use_fake(monkeypatch, [invented] * groq_client.MAX_ATTEMPTS)
+    with pytest.raises(groq_client.GroqError):
+        groq_client.generate_review(5, EXPERIENCE)
+
+
+def test_calls_are_bounded_by_the_deadline(monkeypatch):
+    clock = iter([0.0, 0.0, groq_client.SETTLE_SECONDS + 1, 99.0])
+    monkeypatch.setattr(groq_client.time, "monotonic", lambda: next(clock))
+    fake = use_fake(monkeypatch, [AI_ISH, AI_ISH, C])
+    assert groq_client.generate_review(5, EXPERIENCE) == AI_ISH  # stopped early
+    assert len(fake.prompts) == 1
+    assert fake.timeouts[0] <= groq_client.CALL_TIMEOUT_SECONDS

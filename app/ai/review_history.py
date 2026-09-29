@@ -25,9 +25,9 @@ MAX_TOKEN_SIMILARITY = 0.70  # word-set Jaccard overlap
 # Two whole reviews can differ while sharing one templated sentence, so each
 # sentence is also compared with the sentences of recent reviews written for
 # a similar input. Very short sentences are only rejected on an exact match.
-MAX_SENTENCE_SIMILARITY = 0.80
+MAX_SENTENCE_SIMILARITY = 0.85
 MIN_SENTENCE_WORDS = 4
-RELATED_SENTENCE_WINDOW = 20
+RELATED_SENTENCE_WINDOW = 8
 
 # Closing sentences templatize easily ("I left feeling truly satisfied"), so
 # they are compared more strictly against the most recent related reviews.
@@ -151,10 +151,11 @@ AI_STYLE_PHRASES = (
     r"a cut above", r"sheer", r"stellar", r"whether you", r"if you re looking",
     r"can t wait", r"experience was nothing", r"felt instantly",
 )
-# Filler openings real customers rarely type but models love.
+# Filler openings real customers rarely type but models love. Single words
+# only count when a comma follows ("So, ..."), so "So happy with..." is fine.
 FILLER_OPENERS = (
-    r"honestly", r"so", r"well", r"you know", r"wow", r"okay so", r"ok so",
-    r"let me", r"as someone", r"what a", r"if you", r"my reaction",
+    r"(?:honestly|so|well|okay|ok|wow|alright),", r"you know", r"okay so",
+    r"ok so", r"let me", r"as someone", r"my reaction",
 )
 
 # Words that push a review's tone past its rating, unless the customer used
@@ -189,7 +190,7 @@ _TOPIC_RES = {topic: _alternation(p) for topic, p in UNGROUNDED_TOPICS.items()}
 _EXTRA_RES = {topic: _alternation(p) for topic, p in EXTRA_GROUNDING.items()}
 _PROMO_RES = [re.compile(r"\b" + p + r"\b") for p in PROMOTIONAL_PHRASES]
 _AI_STYLE_RES = [re.compile(r"\b" + p + r"\b") for p in AI_STYLE_PHRASES]
-_FILLER_OPENER_RE = re.compile(r"^(?:" + "|".join(FILLER_OPENERS) + r")\b")
+_FILLER_OPENER_RE = re.compile(r"^\s*(?:" + "|".join(FILLER_OPENERS) + r")", re.IGNORECASE)
 _TOO_POSITIVE_LOW_RE = _alternation(TOO_POSITIVE_LOW)
 _TOO_POSITIVE_MID_RE = _alternation(TOO_POSITIVE_MID)
 _TOO_NEGATIVE_HIGH_RE = _alternation(TOO_NEGATIVE_HIGH)
@@ -266,9 +267,9 @@ def ai_style_problem(review: str, experience: str | None) -> str | None:
     experience_n = normalize(experience or "")
     if "\u2014" in review or ";" in review:
         return "it used an em dash or semicolon, which reads as AI-written"
-    opener = _FILLER_OPENER_RE.match(review_n)
+    opener = _FILLER_OPENER_RE.match(review)
     if opener:
-        return f"it opened with the filler '{opener.group(0)}'"
+        return f"it opened with the filler '{opener.group(0).strip(' ,')}'"
     for pattern in _AI_STYLE_RES:
         match = pattern.search(review_n)
         if match and not pattern.search(experience_n):
@@ -382,6 +383,12 @@ class ReviewHistory:
             past = [e.normalized for e in self._entries]
         return _too_similar(normalize(text), past + [normalize(t) for t in extra])
 
+    def is_duplicate(self, text: str) -> bool:
+        """Whether ``text`` normalizes to exactly a past review."""
+        n = normalize(text)
+        with self._lock:
+            return any(e.normalized == n for e in self._entries)
+
     def reused_sentence(self, key: tuple[int, str], text: str) -> str | None:
         """Reason a sentence of ``text`` repeats a sentence of a recent related
         review, else ``None``."""
@@ -419,12 +426,18 @@ class ReviewHistory:
             return "its closing sentence followed the same pattern as a recent review"
         return None
 
-    def add_if_unique(self, key: tuple[int, str], text: str) -> bool:
+    def add_if_unique(
+        self, key: tuple[int, str], text: str, *, allow_similar: bool = False
+    ) -> bool:
         """Atomically re-check and record ``text``. Returns ``False`` if a
-        concurrent request stored a too-similar review first."""
+        concurrent request stored a too-similar review first, or only an
+        identical one when ``allow_similar`` (used for fallbacks)."""
         entry = _entry(key, text)
         with self._lock:
-            if _too_similar(entry.normalized, [e.normalized for e in self._entries]):
+            past = [e.normalized for e in self._entries]
+            if entry.normalized in past or (
+                not allow_similar and _too_similar(entry.normalized, past)
+            ):
                 return False
             self._entries.append(entry)
         return True
