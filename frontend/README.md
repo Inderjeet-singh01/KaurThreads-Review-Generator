@@ -26,7 +26,7 @@ Both are **required** and must never be hardcoded in source.
 | Variable                 | Description                                                                 |
 | ------------------------ | --------------------------------------------------------------------------- |
 | `VITE_API_BASE_URL`      | Base URL of the FastAPI backend (no trailing slash), e.g. `http://127.0.0.1:8000`. |
-| `VITE_GOOGLE_REVIEW_URL` | The Google Business Profile "Ask for reviews" link, `https://g.page/r/<id>/review` (`/review` is added if missing). It opens the stars + review box directly on phones and desktop. Get it by searching the boutique on Google while signed in as the owner → **Ask for reviews**. |
+| `VITE_GOOGLE_REVIEW_URL` | Google "write a review" link with the place id, e.g. `https://search.google.com/local/writereview?placeid=ChIJXfSGFKDvDzkRaANBXxmg1Z8`. The app derives a Google Maps review link from it (see "Post on Google" below). A `https://g.page/r/<id>/review` link is also accepted and used as-is. |
 
 ## How it connects to the backend
 
@@ -35,11 +35,16 @@ Both are **required** and must never be hardcoded in source.
 - Uses the `review` field of the JSON response as the editable draft.
 - Handles loading, network/timeout (20s abort), non-2xx, and invalid responses
   with a single customer-safe message — backend error details are never shown.
-- **Post on Google** is a real link to `VITE_GOOGLE_REVIEW_URL` that opens in
-  a new tab. Tapping it copies the current (edited) text to the clipboard
-  synchronously (with a Clipboard API fallback) and shows a confirmation.
-  It is a link rather than a scripted redirect because phones only hand a
-  review link to the Maps app, or open it on the review box, reliably from a
+- **Post on Google** is a real link that lands on Google's stars + review box.
+  From the place id it builds `https://www.google.com/maps/place//data=!4m3!3m2!1s<feature id>!12e1`
+  (the link Google's own review short link resolves to; `!12e1` opens the
+  review sheet). On Android it is an `intent://` link that opens the Google
+  Maps app, with the browser as fallback when Maps isn't installed. On
+  iPhone/iPad and desktop it is the https link, which iOS opens in the Maps
+  app when installed and in Safari otherwise (`src/googleReview.js`).
+  Tapping it copies the current (edited) text to the clipboard synchronously
+  (with a Clipboard API fallback) and shows a confirmation. It is a link, not
+  a scripted redirect, because phones only hand links to apps reliably from a
   real tap. The customer pastes and submits the review on Google; the app
   never posts to Google and adds no backend route.
 

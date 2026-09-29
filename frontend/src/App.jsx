@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import Header from './components/Header.jsx'
 import Hero from './components/Hero.jsx'
 import Benefits from './components/Benefits.jsx'
@@ -9,6 +9,7 @@ import ClosingSection from './components/ClosingSection.jsx'
 import Footer from './components/Footer.jsx'
 import { generateReview, GENERIC_ERROR, GOOGLE_REVIEW_URL } from './api.js'
 import { copyText } from './clipboard.js'
+import { googleReviewLink } from './googleReview.js'
 
 const NO_RATING_ERROR = 'Please select a rating first.'
 const EMPTY_REVIEW_ERROR = 'Please generate or write your review first.'
@@ -23,12 +24,18 @@ export default function App() {
   const [postStatus, setPostStatus] = useState(null) // 'copied' | 'manual' | null
 
   const googleConfigured = Boolean(GOOGLE_REVIEW_URL)
+  const googleLink = googleReviewLink()
+  // Set synchronously so a fast double click can't send a second request
+  // before the disabled button re-renders: one click, one POST.
+  const generatingRef = useRef(false)
 
   async function runGenerate() {
+    if (generatingRef.current) return
     if (!rating) {
       setError(NO_RATING_ERROR)
       return
     }
+    generatingRef.current = true
     setError('')
     setPostStatus(null)
     setLoading(true)
@@ -39,6 +46,7 @@ export default function App() {
     } catch (err) {
       setError(err?.message || GENERIC_ERROR)
     } finally {
+      generatingRef.current = false
       setLoading(false)
     }
   }
@@ -121,7 +129,7 @@ export default function App() {
               error={error}
               postStatus={postStatus}
               googleConfigured={googleConfigured}
-              googleReviewUrl={GOOGLE_REVIEW_URL}
+              googleLink={googleLink}
             />
           )}
 

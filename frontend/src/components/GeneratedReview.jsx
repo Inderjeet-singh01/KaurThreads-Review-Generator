@@ -10,7 +10,7 @@ export default function GeneratedReview({
   error,
   postStatus,
   googleConfigured,
-  googleReviewUrl,
+  googleLink,
 }) {
   return (
     <div className="generated">
@@ -66,11 +66,11 @@ export default function GeneratedReview({
         {googleConfigured && !loading ? (
           // A real link, not a scripted redirect: phones only open Google's
           // review box (in the Maps app or the browser) reliably from a tap
-          // on a link. A new tab keeps this page open to copy from again.
+          // on a link. The href/target differ per device (see googleReview.js).
           <a
             className="btn btn--primary"
-            href={googleReviewUrl}
-            target="_blank"
+            href={googleLink.href}
+            target={googleLink.target}
             rel="noopener noreferrer"
             onClick={onPostGoogle}
             title="Copy your review and open Google"

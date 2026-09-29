@@ -9,6 +9,10 @@ const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '
 export const GENERIC_ERROR =
   'Something went wrong while generating your review. Please try again.'
 
+// Shown when the backend answers 429 (the AI service is busy). Not retried.
+export const BUSY_ERROR =
+  'Lots of reviews are being written right now. Please wait a moment and try again.'
+
 /**
  * Call POST /generate-review.
  *
@@ -50,7 +54,7 @@ export async function generateReview({ rating, experience, timeoutMs = 20000 }) 
 
   if (!response.ok) {
     console.error('generate-review responded with status', response.status)
-    throw new Error(GENERIC_ERROR)
+    throw new Error(response.status === 429 ? BUSY_ERROR : GENERIC_ERROR)
   }
 
   let data
