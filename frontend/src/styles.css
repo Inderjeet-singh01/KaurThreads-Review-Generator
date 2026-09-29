@@ -671,6 +671,7 @@ img {
   min-height: 44px;
   padding: 10px 22px;
   cursor: pointer;
+  text-decoration: none; /* "Post on Google" is a link styled as a button */
   transition: transform 0.12s ease, box-shadow 0.2s ease, background 0.2s ease,
     opacity 0.2s ease;
 }

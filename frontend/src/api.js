@@ -69,4 +69,14 @@ export async function generateReview({ rating, experience, timeoutMs = 20000 }) 
   return data.review.trim()
 }
 
-export const GOOGLE_REVIEW_URL = import.meta.env.VITE_GOOGLE_REVIEW_URL || ''
+// Google Business Profile "Ask for reviews" link (https://g.page/r/<id>/review).
+// It is the only link Google maintains for opening the stars + review box
+// directly on Android, iOS and desktop, in the Maps app or the browser.
+// Without the trailing /review it opens the place page, so add it if missing.
+function toReviewUrl(value) {
+  const url = (value || '').trim()
+  const shortLink = url.match(/^(https:\/\/g\.page\/r\/[^/?#]+)\/?$/)
+  return shortLink ? `${shortLink[1]}/review` : url
+}
+
+export const GOOGLE_REVIEW_URL = toReviewUrl(import.meta.env.VITE_GOOGLE_REVIEW_URL)

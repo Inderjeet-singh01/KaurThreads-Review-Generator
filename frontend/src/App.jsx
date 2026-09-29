@@ -8,11 +8,10 @@ import FeatureStrip from './components/FeatureStrip.jsx'
 import ClosingSection from './components/ClosingSection.jsx'
 import Footer from './components/Footer.jsx'
 import { generateReview, GENERIC_ERROR, GOOGLE_REVIEW_URL } from './api.js'
+import { copyText } from './clipboard.js'
 
 const NO_RATING_ERROR = 'Please select a rating first.'
 const EMPTY_REVIEW_ERROR = 'Please generate or write your review first.'
-// Long enough for the customer to see the copy confirmation before Google opens.
-const REDIRECT_DELAY_MS = 700
 
 export default function App() {
   const [rating, setRating] = useState(0)
@@ -54,31 +53,36 @@ export default function App() {
     if (error === EMPTY_REVIEW_ERROR) setError('')
   }
 
-  async function handlePostGoogle() {
+  // Runs on the "Post on Google" link's click. The link itself opens Google:
+  // a real tap on a link is what lets phones hand it to the Maps app or open
+  // it in the browser straight on the review box, and it is never treated as
+  // a popup. So this handler stays synchronous and only cancels the
+  // navigation when there is nothing to post.
+  function handlePostGoogle(event) {
     const text = review.trim() // current (possibly edited) review
     if (!text) {
+      event.preventDefault()
       setPostStatus(null)
       setError(EMPTY_REVIEW_ERROR)
       return
     }
-    if (!googleConfigured) return
     setError('')
 
     // Google's review box can't be pre-filled, so copy the text for the
     // customer to paste. Best-effort — never block opening Google.
-    try {
-      await navigator.clipboard.writeText(text)
+    if (copyText(text)) {
       setPostStatus('copied')
-    } catch (err) {
-      console.warn('Could not copy review to clipboard:', err)
+    } else if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).then(
+        () => setPostStatus('copied'),
+        (err) => {
+          console.warn('Could not copy review to clipboard:', err)
+          setPostStatus('manual')
+        },
+      )
+    } else {
       setPostStatus('manual')
     }
-
-    // Let the confirmation render before leaving the page. Same-tab
-    // navigation, so no popup blocker is involved.
-    setTimeout(() => {
-      window.location.href = GOOGLE_REVIEW_URL
-    }, REDIRECT_DELAY_MS)
   }
 
   function handleBack() {
@@ -117,6 +121,7 @@ export default function App() {
               error={error}
               postStatus={postStatus}
               googleConfigured={googleConfigured}
+              googleReviewUrl={GOOGLE_REVIEW_URL}
             />
           )}
 

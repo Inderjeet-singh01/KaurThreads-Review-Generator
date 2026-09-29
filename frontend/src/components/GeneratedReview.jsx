@@ -10,6 +10,7 @@ export default function GeneratedReview({
   error,
   postStatus,
   googleConfigured,
+  googleReviewUrl,
 }) {
   return (
     <div className="generated">
@@ -62,20 +63,36 @@ export default function GeneratedReview({
           )}
         </button>
 
-        <button
-          type="button"
-          className="btn btn--primary"
-          onClick={onPostGoogle}
-          disabled={loading || !googleConfigured}
-          title={
-            googleConfigured
-              ? 'Copy your review and open Google'
-              : 'Google review link is not configured yet'
-          }
-        >
-          <GoogleIcon width="20" height="20" />
-          Post on Google
-        </button>
+        {googleConfigured && !loading ? (
+          // A real link, not a scripted redirect: phones only open Google's
+          // review box (in the Maps app or the browser) reliably from a tap
+          // on a link. A new tab keeps this page open to copy from again.
+          <a
+            className="btn btn--primary"
+            href={googleReviewUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={onPostGoogle}
+            title="Copy your review and open Google"
+          >
+            <GoogleIcon width="20" height="20" />
+            Post on Google
+          </a>
+        ) : (
+          <button
+            type="button"
+            className="btn btn--primary"
+            disabled
+            title={
+              googleConfigured
+                ? 'Please wait for your review'
+                : 'Google review link is not configured yet'
+            }
+          >
+            <GoogleIcon width="20" height="20" />
+            Post on Google
+          </button>
+        )}
       </div>
 
       <div className="post-status" role="status" aria-live="polite">
@@ -84,13 +101,14 @@ export default function GeneratedReview({
             <p className="post-status__title">
               <span aria-hidden="true">✓</span> Your review has been copied!
             </p>
-            <p className="post-status__text">Google is opening...</p>
-            <p className="post-status__text">Tap the review box and paste your review.</p>
+            <p className="post-status__text">
+              Google opens on the review box. Pick your stars, tap the box and paste your review.
+            </p>
           </>
         )}
         {postStatus === 'manual' && (
           <p className="post-status__text">
-            Google is opening. Please copy your review manually if needed.
+            Google opens on the review box. Copy your review above and paste it there.
           </p>
         )}
       </div>
