@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { BotanicalSprig } from './icons.jsx'
+import { BotanicalSprig, HeartIcon } from './icons.jsx'
 
 /**
  * Hero portrait — the South Asian model in the pink embroidered outfit from the
@@ -30,8 +30,10 @@ export default function Hero() {
           Experience
         </h1>
         <p className="hero__subtitle">
-          Your feedback means a lot <br className="hero__break" />
-          and helps us serve you better.
+          Your feedback helps us
+          <br />
+          serve you better.
+          <HeartIcon className="hero__heart" />
         </p>
       </div>
 

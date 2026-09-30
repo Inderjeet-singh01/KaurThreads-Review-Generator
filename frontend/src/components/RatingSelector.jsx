@@ -58,7 +58,6 @@ export default function RatingSelector({ rating, onChange, disabled }) {
           >
             <StarIcon className="rating__star" filled={on} width="44" height="44" />
             <span className="rating__value">{value}</span>
-            <span className="rating__label">{label}</span>
           </button>
         )
       })}

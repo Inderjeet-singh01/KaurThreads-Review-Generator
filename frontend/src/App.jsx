@@ -1,12 +1,10 @@
 import { useRef, useState } from 'react'
 import Header from './components/Header.jsx'
 import Hero from './components/Hero.jsx'
-import Benefits from './components/Benefits.jsx'
 import ReviewForm from './components/ReviewForm.jsx'
 import GeneratedReview from './components/GeneratedReview.jsx'
-import FeatureStrip from './components/FeatureStrip.jsx'
 import ClosingSection from './components/ClosingSection.jsx'
-import Footer from './components/Footer.jsx'
+import ContactLinks from './components/ContactLinks.jsx'
 import { generateReview, GENERIC_ERROR, GOOGLE_REVIEW_URL } from './api.js'
 import { copyText } from './clipboard.js'
 import { googleReviewLink } from './googleReview.js'
@@ -105,9 +103,8 @@ export default function App() {
 
       <main className="content">
         <Hero />
-        <Benefits />
 
-        <div className="card">
+        <div className="review-panel">
           {phase === 'form' ? (
             <ReviewForm
               rating={rating}
@@ -119,27 +116,27 @@ export default function App() {
               error={error}
             />
           ) : (
-            <GeneratedReview
-              review={review}
-              onReviewChange={handleReviewChange}
-              onRegenerate={runGenerate}
-              onPostGoogle={handlePostGoogle}
-              onBack={handleBack}
-              loading={loading}
-              error={error}
-              postStatus={postStatus}
-              googleConfigured={googleConfigured}
-              googleLink={googleLink}
-            />
+            <div className="card">
+              <GeneratedReview
+                review={review}
+                onReviewChange={handleReviewChange}
+                onRegenerate={runGenerate}
+                onPostGoogle={handlePostGoogle}
+                onBack={handleBack}
+                loading={loading}
+                error={error}
+                postStatus={postStatus}
+                googleConfigured={googleConfigured}
+                googleLink={googleLink}
+              />
+            </div>
           )}
 
-          <FeatureStrip />
+          <ContactLinks />
         </div>
 
         <ClosingSection />
       </main>
-
-      <Footer />
     </div>
   )
 }

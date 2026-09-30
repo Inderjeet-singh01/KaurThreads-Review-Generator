@@ -13,6 +13,17 @@ export const GENERIC_ERROR =
 export const BUSY_ERROR =
   'Lots of reviews are being written right now. Please wait a moment and try again.'
 
+// Shown when the backend answers 400: the experience isn't about the boutique.
+export const OFF_TOPIC_ERROR =
+  'Please tell us about your experience with our clothes or services.'
+
+// Shown when the backend answers 409: the one draft it wrote didn't pass its
+// checks (e.g. too close to an earlier review). The customer can try again.
+export const RETRY_ERROR =
+  "We couldn't write a fresh review this time. Please try again."
+
+const STATUS_ERRORS = { 400: OFF_TOPIC_ERROR, 409: RETRY_ERROR, 429: BUSY_ERROR }
+
 /**
  * Call POST /generate-review.
  *
@@ -54,7 +65,7 @@ export async function generateReview({ rating, experience, timeoutMs = 20000 }) 
 
   if (!response.ok) {
     console.error('generate-review responded with status', response.status)
-    throw new Error(response.status === 429 ? BUSY_ERROR : GENERIC_ERROR)
+    throw new Error(STATUS_ERRORS[response.status] || GENERIC_ERROR)
   }
 
   let data

@@ -26,11 +26,12 @@ export default function ReviewForm({
       }}
       noValidate
     >
-      <h2 className="card__title">Select Your Rating</h2>
+      <div className="card">
+        <h2 className="card__title">Your Rating</h2>
+        <RatingSelector rating={rating} onChange={onRatingChange} disabled={loading} />
+      </div>
 
-      <RatingSelector rating={rating} onChange={onRatingChange} disabled={loading} />
-
-      <div className="field">
+      <div className="card field">
         <label className="field__label" htmlFor="experience">
           Tell us a little more <span className="field__optional">(optional)</span>
         </label>

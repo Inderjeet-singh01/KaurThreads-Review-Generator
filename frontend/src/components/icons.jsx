@@ -134,6 +134,53 @@ export function ArrowRightIcon(props) {
   )
 }
 
+export function ChevronRightIcon(props) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
+      <path
+        d="M9.5 5.5l6.5 6.5-6.5 6.5"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
+export function PhoneIcon(props) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
+      <path
+        d="M21 16.4v2.8a1.9 1.9 0 01-2.07 1.9 18.8 18.8 0 01-8.2-2.92 18.5 18.5 0 01-5.7-5.7A18.8 18.8 0 012.1 4.24 1.9 1.9 0 013.99 2.2H6.8a1.9 1.9 0 011.9 1.63c.12.9.34 1.78.66 2.63a1.9 1.9 0 01-.43 2L7.73 9.67a15.2 15.2 0 005.7 5.7l1.2-1.2a1.9 1.9 0 012-.43c.85.32 1.73.54 2.63.66A1.9 1.9 0 0121 16.4z"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+// Instagram glyph in its brand gradient — used only as a recognizable link icon.
+export function InstagramIcon(props) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
+      <defs>
+        <linearGradient id="ig-gradient" x1="3" y1="21" x2="21" y2="3" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stopColor="#f9ce34" />
+          <stop offset="0.5" stopColor="#ee2a7b" />
+          <stop offset="1" stopColor="#6228d7" />
+        </linearGradient>
+      </defs>
+      <g stroke="url(#ig-gradient)" strokeWidth="2.1">
+        <rect x="3" y="3" width="18" height="18" rx="5.4" />
+        <circle cx="12" cy="12" r="4.1" />
+      </g>
+      <circle cx="17.3" cy="6.7" r="1.25" fill="url(#ig-gradient)" />
+    </svg>
+  )
+}
+
 // Google "G" in its brand colors — used only as a recognizable link glyph.
 export function GoogleIcon(props) {
   return (
