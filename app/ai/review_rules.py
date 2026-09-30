@@ -301,9 +301,14 @@ _COMPLAINT_RE = _words((
     r"crowded", r"overpriced", r"expensive", r"unhelpful", r"ignored", r"without",
     r"lack\w*", r"let down", r"damper", r"(?:un|dis)interested", r"ordinary",
     r"uninspir\w*", r"sloppy", r"unprofessional", r"boring", r"dull", r"felt off",
+    r"uninviting", r"unwelcoming", r"unfriendly", r"indifferent", r"cold", r"lukewarm", r"bland",
 ))
 
 
+_NOT_A_COMPLAINT_RE = _words((
+    r"not (?:too |that |so )?bad", r"no (?:complaints?|issues?|problems?)", r"nothing (?:wrong|bad)",
+    r"can t complain", r"not (?:a )?disappoint\w*", r"never (?:a )?(?:problem|issue)",
+))
 # Not complaints about the boutique itself: "the service didn't meet my
 # expectations" is the low rating in words, "won't go back" is its result.
 _NOT_COMPLAINT_TOPICS = frozenset({"service", "return visit", "recommendation", "claimed outcome", "purchase"})
@@ -312,7 +317,9 @@ _NOT_COMPLAINT_TOPICS = frozenset({"service", "return visit", "recommendation", 
 def invented_complaint(sentence: str, experience: str | None) -> str | None:
     """Boutique topics a sentence complains about that the customer never
     raised. Complaints may only come from the customer."""
-    sentence_n = normalize(sentence)
+    # Mild or reassuring wording ("average", "not bad", "no complaints") is
+    # not a complaint, so it is removed before looking for negative cues.
+    sentence_n = _LUKEWARM_RE.sub(" ", _NOT_A_COMPLAINT_RE.sub(" ", normalize(sentence)))
     if not (_COMPLAINT_RE.search(sentence_n) or _NEGATIVE_CUE_RE.search(sentence_n)):
         return None
     topics = [

@@ -33,6 +33,7 @@ class FakeGroq:
 
     calls: list[dict] = []
     replies: list = []
+    last = None
 
     def __init__(self, **kwargs):
         assert kwargs.get("max_retries") == 0  # the SDK must not retry either
@@ -40,7 +41,8 @@ class FakeGroq:
 
     def _create(self, **kwargs):
         FakeGroq.calls.append(kwargs)
-        reply = FakeGroq.replies.pop(0)
+        # Out of scripted replies: the model writes the same thing again.
+        reply = FakeGroq.last = FakeGroq.replies.pop(0) if FakeGroq.replies else FakeGroq.last
         if isinstance(reply, Exception):
             raise reply
         return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=reply))])
@@ -69,6 +71,7 @@ class FakeGemini:
 def fake_groq(monkeypatch):
     FakeGroq.calls = []
     FakeGroq.replies = []
+    FakeGroq.last = None
     FakeGemini.calls = []
     FakeGemini.replies = []
     monkeypatch.setattr(groq_client, "Groq", FakeGroq)
@@ -94,7 +97,8 @@ def _post(rating=5, experience="Good collection and nice quality."):
 def _generate(fake, rating, experience, reply):
     fake.replies = [reply]
     response = _post(rating, experience)
-    assert len(fake.calls) == 1  # never more than one Groq call per click
+    # One call when a version passes, one fresh retry when none does.
+    assert len(fake.calls) == (groq_client.MAX_PROVIDER_CALLS if response.status_code == 409 else 1)
     return response
 
 
@@ -128,10 +132,32 @@ def test_each_generation_makes_exactly_one_call(fake_groq):
         assert len(fake_groq.calls) == expected_calls
 
 
-def test_rejected_review_is_not_regenerated(fake_groq):
-    # Only invented content: rejected with 409 after the one call, no retry.
+def test_rejected_review_gets_one_fresh_retry_then_a_controlled_error(fake_groq):
+    # Only invented content, twice: 409 after exactly two calls.
     response = _generate(fake_groq, 5, "Good collection.", "The staff was helpful and prices were low.")
     assert response.status_code == 409
+    assert len(fake_groq.calls) == 2
+
+
+def test_retry_after_failed_checks_returns_the_fresh_review(fake_groq, gemini):
+    fake_groq.replies = [V_INVENTED, V_GOOD]
+    response = _post(5, "Good collection and nice quality.")
+    assert response.json()["review"] == V_GOOD
+    assert len(fake_groq.calls) == 2 and gemini.calls == []  # retry is Groq, never Gemini
+    # the retry gets its own style notes, and the prompt otherwise matches
+    assert fake_groq.calls[1]["messages"][0] == fake_groq.calls[0]["messages"][0]
+
+
+def test_retry_that_hits_a_groq_outage_is_still_a_rejection(fake_groq, gemini):
+    fake_groq.replies = [V_INVENTED, RateLimitError("rate limited", response=_groq_response(429), body=None)]
+    assert _post(5, "Good collection and nice quality.").status_code == 409
+    assert len(fake_groq.calls) == 2 and gemini.calls == []  # never a third call
+
+
+def test_gemini_fallback_that_fails_checks_is_not_retried(fake_groq, gemini):
+    groq_429 = RateLimitError("rate limited", response=_groq_response(429), body=None)
+    assert _fallback(fake_groq, gemini, groq_429, V_INVENTED).status_code == 409
+    assert len(fake_groq.calls) == 1 and len(gemini.calls) == 1  # two calls used up
 
 
 def test_rate_limit_is_returned_not_retried(fake_groq):
@@ -154,7 +180,7 @@ def test_missing_key_makes_no_call(fake_groq, monkeypatch):
 
 
 def test_model_settings_and_prompt(fake_groq):
-    _generate(fake_groq, 4, "Staff helped me choose the design.", "The staff was helpful while I was choosing the design.")
+    _generate(fake_groq, 4, "Staff helped me choose the design.", "The staff was helpful while I was choosing the design. Liked the options. Happy with it.")
     call = fake_groq.calls[0]
     assert call["model"] == groq_client.settings.groq_model
     assert 0.8 <= call["temperature"] <= 0.9
@@ -355,7 +381,7 @@ def test_duplicate_is_rejected_with_one_call_each(fake_groq):
     fake_groq.replies = [reply, reply]
     assert _post().status_code == 200
     assert _post().status_code == 409
-    assert len(fake_groq.calls) == 2
+    assert len(fake_groq.calls) == 3  # 1, then a duplicate and its one retry
 
 
 @pytest.mark.parametrize(
@@ -565,10 +591,10 @@ def test_prompt_asks_for_several_versions(fake_groq):
 
 
 
-def test_failed_checks_never_make_a_second_request(fake_groq, gemini):
+def test_failed_checks_never_go_to_gemini(fake_groq, gemini):
     response = _fallback(fake_groq, gemini, V_INVENTED, V_GOOD)
     assert response.status_code == 409
-    assert len(fake_groq.calls) == 1 and gemini.calls == []  # one request per click
+    assert len(fake_groq.calls) == 2 and gemini.calls == []
 
 
 def test_version_missing_a_point_is_used_when_it_is_the_only_one_left(fake_groq):
@@ -627,6 +653,7 @@ def test_gemini_call_has_automatic_function_calling_off(fake_groq, gemini):
         ("The collection felt limited.", None),
         ("The staff seemed busy but did not give any updates.", "Alteration took too long."),
         ("Service was slow.", None),
+        ("The atmosphere was uninviting and the service seemed indifferent.", None),
     ],
 )
 def test_added_complaints_are_removed(sentence, experience):
@@ -679,3 +706,65 @@ def test_unnamed_garments_and_hype_are_repaired_locally(text, rating, experience
 def test_delay_wording_counts_as_the_customer_raising_timing():
     assert review_rules.sentence_problem("The wait was really long.", 2, "Alteration took too long.") is None
     assert "complaint" in review_rules.sentence_problem("The staff seemed uninterested.", 2, None)
+
+
+# --- Groq busy: short wait, then Groq again ----------------------------------------
+
+
+def _groq_busy(retry_after=None, message="rate limited"):
+    headers = {"retry-after": retry_after} if retry_after is not None else {}
+    request = httpx.Request("POST", "https://api.groq.com/openai/v1/chat/completions")
+    return RateLimitError(message, response=httpx.Response(429, headers=headers, request=request), body=None)
+
+
+@pytest.fixture
+def sleeps(monkeypatch):
+    waited = []
+    monkeypatch.setattr(groq_client.time, "sleep", waited.append)
+    return waited
+
+
+@pytest.mark.parametrize(
+    "busy",
+    [_groq_busy(retry_after="2"), _groq_busy(message="Rate limit reached. Please try again in 3.07s. Need more tokens?")],
+    ids=["header", "message"],
+)
+def test_short_groq_wait_is_waited_out_instead_of_gemini(fake_groq, gemini, sleeps, busy):
+    fake_groq.replies = [busy, GOOD_REPLY]
+    response = _post()
+    assert response.json()["review"] == GOOD_REPLY
+    assert len(fake_groq.calls) == 2 and gemini.calls == []
+    assert sleeps and sleeps[0] <= groq_client.MAX_GROQ_WAIT_SECONDS
+
+
+def test_long_or_unknown_groq_wait_goes_to_gemini(fake_groq, gemini, sleeps):
+    for busy in (_groq_busy(retry_after="30"), _groq_busy()):
+        fake_groq.calls, gemini.calls = [], []
+        gemini.replies = [GEMINI_REPLY if not fake_groq.calls else GOOD_REPLY]
+        fake_groq.replies = [busy]
+        assert _post().status_code in (200, 409)
+        assert len(fake_groq.calls) == 1 and len(gemini.calls) == 1
+    assert sleeps == []
+
+
+def test_groq_still_busy_after_the_wait_is_a_busy_error_with_two_calls(fake_groq, gemini, sleeps):
+    fake_groq.replies = [_groq_busy(retry_after="1"), _groq_busy(retry_after="1")]
+    assert _post().status_code == 429
+    assert len(fake_groq.calls) == 2 and gemini.calls == []  # never a third call
+
+
+def test_groq_wait_that_would_break_the_deadline_goes_to_gemini(fake_groq, gemini, sleeps, monkeypatch):
+    monkeypatch.setattr(groq_client, "REQUEST_BUDGET_SECONDS", groq_client.MIN_GEMINI_SECONDS + 1)
+    fake_groq.replies = [_groq_busy(retry_after="3")]
+    gemini.replies = [GEMINI_REPLY]
+    assert _post().json()["review"] == GEMINI_REPLY
+    assert sleeps == []
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    ["The collection was not bad.", "No complaints about the staff.", "The staff were average.",
+     "The selection was decent but nothing special."],
+)
+def test_mild_three_star_wording_is_not_an_invented_complaint(sentence):
+    assert review_rules.sentence_problem(sentence, 3, None) is None

@@ -1,14 +1,22 @@
 """Review generation: a boutique review from a rating + experience.
 
-Each click makes ONE generation request that asks for CANDIDATES
-alternative versions; the first that passes every local check is returned.
-Groq is the primary provider. Gemini gets ONE call with the same prompts only
-when Groq itself fails for a transient provider reason (rate limit, timeout,
-network, 5xx). There are no retries or LLM-based checking. The flow is::
+Each generation request asks for CANDIDATES alternative versions; the
+first that passes every local check is returned. Groq is the primary
+provider. A click makes at most MAX_PROVIDER_CALLS calls:
 
-    domain check (local) -> one Groq call [-> one Gemini call if Groq is
-    down] -> per version: local clean-up and checks (hard facts, tone,
-    uniqueness; coverage preferred) -> save the best that passes -> return
+- Groq is busy (429) and asks for a short wait: Groq gets one more call
+  after that wait.
+- Groq fails transiently otherwise (longer wait, timeout, network, 5xx):
+  Gemini gets one call with the same prompts.
+- Groq answers but none of its versions pass the checks: Groq gets one more
+  call with fresh style notes, so the customer isn't asked to retry.
+
+There is no LLM-based checking. The flow is::
+
+    domain check (local) -> Groq call [-> Gemini if Groq is down] -> per
+    version: local clean-up and checks (hard facts, tone, uniqueness;
+    coverage preferred) -> save the best that passes -> return
+    [no version passed and a call is left -> one fresh Groq call]
 
 Variation comes from a length band and style notes picked locally for that
 one call. A review that fails the local checks is not regenerated; the API
@@ -58,10 +66,12 @@ class GroqError(Exception):
 
 
 class GroqRateLimitError(GroqError):
-    """A provider answered HTTP 429. Never retried automatically."""
+    """A provider answered HTTP 429. ``retry_after`` is its suggested wait in
+    seconds, when it gave one."""
 
-    def __init__(self, message: str = "", reason: str | None = "rate_limited"):
+    def __init__(self, message: str = "", reason: str | None = "rate_limited", retry_after: float | None = None):
         super().__init__(message or BUSY_MESSAGE, reason)
+        self.retry_after = retry_after
 
 
 class NotBoutiqueError(Exception):
@@ -197,6 +207,11 @@ GEMINI_MAX_TOKENS = 1200  # Gemini counts its (low) thinking in this budget
 CALL_TIMEOUT_SECONDS = 8.0
 REQUEST_BUDGET_SECONDS = 18.0
 MIN_GEMINI_SECONDS = 4.0  # less than this left: skip Gemini, it can't finish
+MAX_PROVIDER_CALLS = 2  # per click, whatever happens
+# A 429 whose suggested wait is this short is waited out and Groq retried,
+# instead of switching to Gemini (the free tier clears within seconds).
+MAX_GROQ_WAIT_SECONDS = 4.0
+_RETRY_IN_RE = re.compile(r"try again in (?:(\d+)m)?([\d.]+)(ms|s)\b")
 MAX_AVOID_IN_PROMPT = 6
 
 # Typography people don't type on a phone keyboard, swapped for what they do.
@@ -265,27 +280,39 @@ def generate_review(rating: int, experience: str | None) -> str:
 
     request_id = uuid.uuid4().hex[:12]
     key = input_key(rating, experience)
-    plan = plan_review(experience)
-    avoid_openings, avoid_closings = _recent_edges(key)
-    prompt = build_user_prompt(
-        rating, experience, plan, avoid_openings=avoid_openings, avoid_closings=avoid_closings
-    )
     started = time.monotonic()
     deadline = started + REQUEST_BUDGET_SECONDS
-    raw, model = _generate_raw(prompt, request_id, deadline)
-    review, problem = _pick_review(raw, model, request_id, rating, experience, plan.max_words, key)
 
-    if problem:
-        logger.warning("Review rejected: model=%s reason=%s req=%s", model, problem, request_id)
-        raise ReviewRejectedError(
-            "We couldn't write a fresh review this time. Please tap Regenerate."
+    calls = 0
+    while True:
+        plan = plan_review(experience)  # fresh style notes for every call
+        avoid_openings, avoid_closings = _recent_edges(key)
+        prompt = build_user_prompt(
+            rating, experience, plan, avoid_openings=avoid_openings, avoid_closings=avoid_closings
         )
+        if calls == 0:
+            raw, model, used = _generate_raw(prompt, request_id, deadline)
+        else:
+            try:  # the retry is Groq only, and its failure is just a rejection
+                raw, model, used = _generate_raw(prompt, request_id, deadline, allow_fallback=False)
+            except GroqError:
+                break
+        calls += used
+        review, problem = _pick_review(raw, model, request_id, rating, experience, plan.max_words, key)
+        if problem is None:
+            logger.info(
+                "Review OK: model=%s time=%.1fs calls=%d rating=%s words=%d req=%s",
+                model, time.monotonic() - started, calls, rating, len(review.split()), request_id,
+            )
+            return review
+        if calls >= MAX_PROVIDER_CALLS or deadline - time.monotonic() < CALL_TIMEOUT_SECONDS / 2:
+            break
+        logger.warning("Versions failed checks (%s), trying once more req=%s", problem, request_id)
 
-    logger.info(
-        "Review OK: model=%s time=%.1fs rating=%s words=%d req=%s",
-        model, time.monotonic() - started, rating, len(review.split()), request_id,
+    logger.warning("Review rejected: model=%s calls=%d reason=%s req=%s", model, calls, problem, request_id)
+    raise ReviewRejectedError(
+        "We couldn't write a fresh review this time. Please tap Regenerate."
     )
-    return review
 
 
 def _pick_review(
@@ -337,9 +364,11 @@ def split_candidates(raw: str) -> list[str]:
     return [part for part in parts if part][:CANDIDATES]
 
 
-def _generate_raw(prompt: str, request_id: str, deadline: float) -> tuple[str, str]:
-    """Groq once; on a fallback-eligible failure, Gemini once. Returns
-    (raw text, "provider/model" label). Never more than two provider calls.
+def _generate_raw(
+    prompt: str, request_id: str, deadline: float, allow_fallback: bool = True
+) -> tuple[str, str, int]:
+    """Groq once; on a fallback-eligible failure (when allowed), Gemini once.
+    Returns (raw text, "provider/model" label, provider calls made).
 
     A Groq timeout may still have run on Groq's side; falling back anyway is
     deliberate, and the uniqueness check still guards the returned review.
@@ -347,18 +376,42 @@ def _generate_raw(prompt: str, request_id: str, deadline: float) -> tuple[str, s
     groq_model = f"groq/{settings.groq_model}"
     try:
         # max_retries=0: the SDK would otherwise retry 429s and timeouts itself.
-        raw = _complete(Groq(api_key=settings.groq_api_key, max_retries=0), prompt, request_id)
+        timeout = min(CALL_TIMEOUT_SECONDS, max(1.0, deadline - time.monotonic()))
+        raw = _complete(Groq(api_key=settings.groq_api_key, max_retries=0), prompt, request_id, timeout)
+    except GroqRateLimitError as exc:
+        wait = exc.retry_after
+        if not allow_fallback or wait is None or wait > MAX_GROQ_WAIT_SECONDS \
+                or deadline - time.monotonic() - wait < CALL_TIMEOUT_SECONDS / 2:
+            raw = _fall_back(exc, prompt, request_id, deadline, allow_fallback)
+            return raw, f"gemini/{settings.gemini_model}", 2
+        logger.warning("Groq busy, retrying Groq in %.1fs req=%s", wait, request_id)
+        time.sleep(wait)
+        try:
+            timeout = min(CALL_TIMEOUT_SECONDS, max(1.0, deadline - time.monotonic()))
+            raw = _complete(Groq(api_key=settings.groq_api_key, max_retries=0), prompt, request_id, timeout)
+        except GroqError as retry_exc:  # two calls used: no Gemini after this
+            logger.error("Review failed: model=%s reason=%s after retry req=%s", groq_model, retry_exc.reason, request_id)
+            raise
+        return raw, groq_model, 2
     except GroqError as exc:
-        if not exc.fallback_eligible:
-            logger.error("Review failed: model=%s error=%s req=%s", groq_model, _short(exc.__cause__ or exc), request_id)
-            raise
-        if not settings.gemini_api_key:
-            logger.error("Review failed: model=%s reason=%s (no Gemini fallback configured) req=%s", groq_model, exc.reason, request_id)
-            raise
-        gemini_model = f"gemini/{settings.gemini_model}"
-        logger.warning("Groq failed (%s), falling back to model=%s req=%s", exc.reason, gemini_model, request_id)
-        return _complete_gemini(prompt, request_id, gemini_model, deadline), gemini_model
-    return raw, groq_model
+        raw = _fall_back(exc, prompt, request_id, deadline, allow_fallback)
+        return raw, f"gemini/{settings.gemini_model}", 2
+    return raw, groq_model, 1
+
+
+def _fall_back(exc: GroqError, prompt: str, request_id: str, deadline: float, allow_fallback: bool) -> str:
+    """Gemini's one call after a failed Groq call, or re-raise when the
+    failure isn't transient, the fallback isn't allowed or not configured."""
+    groq_model = f"groq/{settings.groq_model}"
+    if not exc.fallback_eligible or not allow_fallback:
+        logger.error("Review failed: model=%s error=%s req=%s", groq_model, _short(exc.__cause__ or exc), request_id)
+        raise exc
+    if not settings.gemini_api_key:
+        logger.error("Review failed: model=%s reason=%s (no Gemini fallback configured) req=%s", groq_model, exc.reason, request_id)
+        raise exc
+    gemini_model = f"gemini/{settings.gemini_model}"
+    logger.warning("Groq failed (%s), falling back to model=%s req=%s", exc.reason, gemini_model, request_id)
+    return _complete_gemini(prompt, request_id, gemini_model, deadline)
 
 
 def _short(exc: BaseException) -> str:
@@ -533,7 +586,7 @@ def _store(key: tuple[int, str], review: str) -> str | None:
         return None
 
 
-def _complete(client: Groq, prompt: str, request_id: str) -> str:
+def _complete(client: Groq, prompt: str, request_id: str, timeout: float = CALL_TIMEOUT_SECONDS) -> str:
     try:
         response = client.chat.completions.create(
             model=settings.groq_model,
@@ -550,10 +603,10 @@ def _complete(client: Groq, prompt: str, request_id: str) -> str:
                 "type": "json_schema",
                 "json_schema": {"name": "reviews", "strict": True, "schema": REVIEWS_SCHEMA},
             },
-            timeout=CALL_TIMEOUT_SECONDS,
+            timeout=timeout,
         )
     except RateLimitError as exc:
-        raise GroqRateLimitError() from exc
+        raise GroqRateLimitError(retry_after=_retry_after(exc)) from exc
     except BadRequestError as exc:
         # The model's text failed Groq's JSON check: Groq returns that text,
         # and the local parser can still read its versions. No extra call.
@@ -568,6 +621,23 @@ def _complete(client: Groq, prompt: str, request_id: str) -> str:
     if not content:
         raise GroqError("Groq returned an empty review. Please try again.", "empty_response")
     return content
+
+
+def _retry_after(exc: RateLimitError) -> float | None:
+    """Groq's suggested wait: the retry-after header, else the "try again in
+    3.07s" of its message. None when it gave neither."""
+    header = exc.response.headers.get("retry-after") if exc.response is not None else None
+    try:
+        if header is not None:
+            return float(header)
+    except ValueError:
+        pass
+    match = _RETRY_IN_RE.search(str(exc))
+    if not match:
+        return None
+    minutes, amount, unit = match.groups()
+    seconds = float(amount) / (1000 if unit == "ms" else 1)
+    return seconds + 60 * int(minutes or 0)
 
 
 def _failed_generation(exc: BadRequestError) -> str:
