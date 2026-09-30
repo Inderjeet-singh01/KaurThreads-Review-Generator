@@ -115,12 +115,13 @@ TOPICS: dict[str, tuple[str, ...]] = {
     "timing": (
         r"on time", r"in time", r"timely", r"late", r"delay\w*", r"quick\w*",
         r"fast", r"prompt\w*", r"same day", r"deadline", r"wait\w*", r"days",
-        r"weeks", r"hours?",
+        r"weeks", r"hours?", r"slow\w*", r"too long", r"long time", r"ages", r"forever",
     ),
     # Business facts
     "price": (
         r"pric\w*", r"costs?", r"costly", r"cheap\w*", r"expensive", r"afford\w*",
-        r"discount\w*", r"offers?", r"on sale", r"budget", r"money", r"value",
+        r"discount\w*", r"(?:special|festive|seasonal|good|great|best) offers?", r"on offer",
+        r"on sale", r"budget", r"money", r"value",
         r"rupees?", r"rs", r"reasonabl[ey]", r"overpriced",
     ),
     "occasion": (
@@ -239,6 +240,86 @@ def missing_points(review: str, experience: str | None) -> list[str]:
     """Customer points that the review dropped."""
     covered = set(coverage_groups(review))
     return [g for g in coverage_groups(experience) if g not in covered]
+
+
+# Hard facts a review may never state unless the customer did, because they
+# could simply be wrong. General boutique topics (collection, quality, staff,
+# stitching, service...) may be added freely.
+HARD_FACT_TOPICS = ("price", "payment", "brand", "location")
+_DIGIT_RE = re.compile(r"\d")
+
+
+# Hype a rating may not carry (see _positive_ceiling), with plain swaps.
+_SOFTER_PRAISE = {"perfectly": "really well", "perfect": "great", "flawlessly": "really well", "flawless": "great"}
+_SOFTEN_RE = re.compile(r"\b(" + "|".join(_SOFTER_PRAISE) + r")\b", re.IGNORECASE)
+
+
+def _match_case(original: str, word: str) -> str:
+    return word[:1].upper() + word[1:] if original[:1].isupper() else word
+
+
+def generalize_review(text: str, rating: int, experience: str | None) -> str:
+    """Local repairs that keep a sentence instead of dropping it: a garment
+    the customer never named becomes "outfit", and hype above what the
+    rating and their words allow is toned down."""
+    experience_n = normalize(experience or "")
+    for pattern in GARMENTS.values():
+        if re.search(rf"\b(?:{pattern})\b", experience_n):
+            continue
+        text = re.sub(
+            rf"\b(a|an)\s+(?:{pattern})\b",
+            lambda m: _match_case(m.group(1), "an") + " outfit", text, flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            rf"\b(?:{pattern})\b",
+            lambda m: _match_case(m.group(0), "outfits" if re.search(r"(?<!s)s$", m.group(0), re.I) else "outfit"),
+            text, flags=re.IGNORECASE,
+        )
+    if _positive_ceiling(rating, experience_n) < 2:
+        text = _SOFTEN_RE.sub(lambda m: _match_case(m.group(0), _SOFTER_PRAISE[m.group(0).lower()]), text)
+    return text
+
+
+def invented_facts(review: str, experience: str | None) -> list[str]:
+    """Hard facts in the review that the customer never gave: prices,
+    payment, brands, location, numbers, and specific garment, fabric or
+    colour names."""
+    found = [
+        topic
+        for topic in ungrounded_topics(review, experience)
+        if topic in HARD_FACT_TOPICS or topic in _SPECIFIC_RES
+    ]
+    if _DIGIT_RE.search(review) and not _DIGIT_RE.search(experience or ""):
+        found.append("a number")
+    return found
+
+
+# Wording that turns a sentence into a complaint.
+# (with _NEGATIVE_CUE_RE, defined below).
+_COMPLAINT_RE = _words((
+    r"slow\w*", r"sluggish", r"limited", r"uneven", r"rushed", r"messy", r"dirty",
+    r"crowded", r"overpriced", r"expensive", r"unhelpful", r"ignored", r"without",
+    r"lack\w*", r"let down", r"damper", r"(?:un|dis)interested", r"ordinary",
+    r"uninspir\w*", r"sloppy", r"unprofessional", r"boring", r"dull", r"felt off",
+))
+
+
+# Not complaints about the boutique itself: "the service didn't meet my
+# expectations" is the low rating in words, "won't go back" is its result.
+_NOT_COMPLAINT_TOPICS = frozenset({"service", "return visit", "recommendation", "claimed outcome", "purchase"})
+
+
+def invented_complaint(sentence: str, experience: str | None) -> str | None:
+    """Boutique topics a sentence complains about that the customer never
+    raised. Complaints may only come from the customer."""
+    sentence_n = normalize(sentence)
+    if not (_COMPLAINT_RE.search(sentence_n) or _NEGATIVE_CUE_RE.search(sentence_n)):
+        return None
+    topics = [
+        t for t in ungrounded_topics(sentence, experience)
+        if t in TOPICS and t not in _NOT_COMPLAINT_TOPICS
+    ]
+    return ", ".join(topics) or None
 
 
 def ungrounded_topics(review: str, experience: str | None) -> list[str]:
@@ -367,9 +448,12 @@ def sentence_problem(sentence: str, rating: int, experience: str | None) -> str 
     sentence is dropped locally; nothing is regenerated."""
     if _OFF_DOMAIN_RE.search(normalize(sentence)):
         return "it talked about something other than the boutique"
-    invented = ungrounded_topics(sentence, experience)
+    invented = invented_facts(sentence, experience)
     if invented:
-        return "it added details the customer never mentioned: " + ", ".join(invented)
+        return "it stated facts the customer never gave: " + ", ".join(invented)
+    complaint = invented_complaint(sentence, experience)
+    if complaint:
+        return "it added a complaint the customer never made: " + complaint
     phrase = artificial_phrase(sentence, experience)
     if phrase:
         return f"it used the promotional/AI phrase '{phrase}'"

@@ -215,25 +215,42 @@ def test_product_and_service_are_both_kept(fake_groq):
     reply = "Loved the blouse. The fitting was much better once the alteration was done. Happy with it."
     assert _generate(fake_groq, 5, experience, reply).json()["review"] == reply
 
-    fake_groq.calls = []  # a review that drops the service point is rejected
-    assert _generate(fake_groq, 5, experience, "Loved the blouse, it was really pretty. Happy with it. That's about it.").status_code == 409
+    fake_groq.calls = []  # a version covering every point beats one that drops the service point
+    partial = "The blouse was really pretty. Happy with it. That's about it."
+    full = "Really liked my blouse. The fitting came out much better after the alteration. Glad I went."
+    assert _generate(fake_groq, 5, experience, json.dumps({"reviews": [partial, full]})).json()["review"] == full
+
+
+@pytest.mark.parametrize(
+    "general",
+    [
+        "The staff was really helpful.",
+        "They did the tailoring quickly.",
+        "Delivery was on time.",
+        "The embroidery was lovely.",
+        "The fabric felt soft.",
+        "There was a nice variety too.",
+        "It was exactly what I was looking for.",
+        "Will check back soon for more.",
+    ],
+)
+def test_general_boutique_comments_are_kept(general):
+    base = "The collection was really good. Liked a lot of it. That's about it."
+    assert _finalize(f"{base} {general}", 5, "Good collection.") == (f"{base} {general}", None)
 
 
 @pytest.mark.parametrize(
     "invented",
     [
-        "The staff was really helpful.",
         "Prices were reasonable too.",
-        "They did the tailoring quickly.",
-        "Delivery was on time.",
-        "The embroidery was lovely.",
         "They stock good brands.",
-        "The fabric felt soft.",
-        "There was a nice variety too.",
-        "It was exactly what I was looking for.",
+        "Paid by card, easy.",
+        "The silk felt soft.",
+        "The red one was lovely.",
+        "It was ready in 2 days.",
     ],
 )
-def test_unsupported_claims_are_removed(fake_groq, invented):
+def test_hard_facts_are_removed(fake_groq, invented):
     base = "The collection was really good. Liked a lot of it. That's about it."
     response = _generate(fake_groq, 5, "Good collection.", f"{base} {invented}")
     assert response.json()["review"] == base
@@ -244,13 +261,13 @@ def test_garment_cannot_be_swapped_but_fitting_can_be_reworded():
         "The blouse fitting was good. The adjustment came out well. Happy with it. The lehenga looked great too.",
         5, "The blouse fitting was good.",
     )
-    assert problem is None
-    assert review == "The blouse fitting was good. The adjustment came out well. Happy with it."
+    assert problem is None  # an unnamed garment is made generic instead of dropped
+    assert review == "The blouse fitting was good. The adjustment came out well. Happy with it. The outfit looked great too."
 
 
-def test_no_experience_gets_no_specific_details():
-    assert review_rules.ungrounded_topics("Nice collection and helpful staff.", None) == ["collection", "staff", "service"]
-    assert review_rules.ungrounded_topics("Nice boutique, liked it.", None) == []
+def test_no_experience_allows_general_comments_but_no_hard_facts():
+    assert review_rules.invented_facts("Nice collection and helpful staff.", None) == []
+    assert review_rules.invented_facts("Loved the silk lehenga for 5000.", None) == ["lehenga", "silk", "a number"]
 
 
 # --- Rating ---------------------------------------------------------------------
@@ -519,7 +536,7 @@ def test_gemini_cannot_return_a_duplicate_of_an_accepted_review(fake_groq, gemin
 
 # --- Several versions per call ---------------------------------------------------
 
-V_INVENTED = "The collection was really good. Staff was friendly. Prices were fair."
+V_INVENTED = "The collection was really good. Prices were fair. They stock nice brands."
 V_GOOD = "Nice collection here. Quality was good as well. Happy with my visit."
 
 
@@ -547,22 +564,18 @@ def test_prompt_asks_for_several_versions(fake_groq):
     assert f"Write {groq_client.CANDIDATES} different versions" in fake_groq.calls[0]["messages"][1]["content"]
 
 
-def test_gemini_gets_one_call_when_no_groq_version_passes(fake_groq, gemini):
-    response = _fallback(fake_groq, gemini, f"{V_INVENTED}\n###\n{V_INVENTED}", f"{V_INVENTED}\n###\n{V_GOOD}")
-    assert response.json()["review"] == V_GOOD
-    assert len(fake_groq.calls) == 1 and len(gemini.calls) == 1
-    assert gemini.calls[0]["contents"] == fake_groq.calls[0]["messages"][1]["content"]  # same prompt
 
-
-def test_no_passing_version_anywhere_is_a_controlled_rejection(fake_groq, gemini):
-    response = _fallback(fake_groq, gemini, V_INVENTED, V_INVENTED)
+def test_failed_checks_never_make_a_second_request(fake_groq, gemini):
+    response = _fallback(fake_groq, gemini, V_INVENTED, V_GOOD)
     assert response.status_code == 409
-    assert len(fake_groq.calls) == 1 and len(gemini.calls) == 1  # two calls at most, Groq not retried
+    assert len(fake_groq.calls) == 1 and gemini.calls == []  # one request per click
 
 
-def test_gemini_outage_after_failed_checks_is_still_a_rejection(fake_groq, gemini):
-    outage = genai_errors.ServerError(503, {"error": {"message": "unavailable"}})
-    assert _fallback(fake_groq, gemini, V_INVENTED, outage).status_code == 409
+def test_version_missing_a_point_is_used_when_it_is_the_only_one_left(fake_groq):
+    experience = "Loved the blouse and the fitting was much better after the alteration."
+    partial = "The blouse was really pretty. Happy with it. That's about it."
+    assert _generate(fake_groq, 5, experience, json.dumps({"reviews": [V_INVENTED, partial]})).json()["review"] == partial
+
 
 
 def test_off_topic_flag_does_not_use_the_second_chance(fake_groq, gemini):
@@ -593,19 +606,76 @@ def test_versions_run_together_are_rejected_not_returned():
     assert problem is not None and "repeated" in problem
 
 
-@pytest.mark.parametrize("sentence", ["Will check back soon for more.", "I'll stop by again.", "Hope to visit soon."])
-def test_return_visit_plans_are_removed(sentence):
-    review, problem = _finalize(f"{GOOD_REPLY} {sentence}", 5, "Good collection and nice quality.")
-    assert problem is None and review == GOOD_REPLY
 
 
-def test_gemini_gets_the_time_left_and_is_skipped_when_too_little_remains(fake_groq, gemini, monkeypatch):
-    groq_429 = RateLimitError("rate limited", response=_groq_response(429), body=None)
-    _fallback(fake_groq, gemini, groq_429, GOOD_REPLY)
-    timeout_ms = gemini.client_kwargs["http_options"].timeout
-    assert (groq_client.REQUEST_BUDGET_SECONDS - 1) * 1000 < timeout_ms <= groq_client.REQUEST_BUDGET_SECONDS * 1000
 
-    gemini.calls = []
-    monkeypatch.setattr(groq_client, "REQUEST_BUDGET_SECONDS", groq_client.MIN_GEMINI_SECONDS - 1)
-    assert _fallback(fake_groq, gemini, groq_429, GOOD_REPLY).status_code == 502
-    assert gemini.calls == []  # no call that could only time out
+def test_rejection_reason_names_the_dropped_facts_not_customer_text():
+    _, problem = _finalize("The fitting was good. Prices were fair. They stock nice brands.", 4, "The fitting was good.")
+    assert problem.startswith("too little was left") and "price" in problem and "brand" in problem
+    assert "fair" not in problem
+
+
+def test_gemini_call_has_automatic_function_calling_off(fake_groq, gemini):
+    _fallback(fake_groq, gemini, RateLimitError("rate limited", response=_groq_response(429), body=None), GOOD_REPLY)
+    assert gemini.calls[0]["config"].automatic_function_calling.disable is True
+
+
+@pytest.mark.parametrize(
+    ("sentence", "experience"),
+    [
+        ("Service was slow and disappointing.", None),
+        ("The collection felt limited.", None),
+        ("The staff seemed busy but did not give any updates.", "Alteration took too long."),
+        ("Service was slow.", None),
+    ],
+)
+def test_added_complaints_are_removed(sentence, experience):
+    assert "complaint" in review_rules.sentence_problem(sentence, 2, experience)
+
+
+@pytest.mark.parametrize(
+    ("sentence", "experience"),
+    [
+        ("The experience was disappointing.", None),
+        ("The alteration took far too long and I was left waiting.", "Alteration took too long."),
+        ("The stitching was bad.", "The stitching was bad."),
+        ("The service just didn't meet my expectations.", None),
+        ("Probably won't go back.", None),
+    ],
+)
+def test_customer_complaints_and_plain_disappointment_stay(sentence, experience):
+    assert review_rules.sentence_problem(sentence, 2, experience) is None
+
+
+def test_groq_json_validation_error_is_read_without_another_call(fake_groq, gemini):
+    failed = BadRequestError(
+        "Failed to validate JSON",
+        response=_groq_response(400),
+        body={"error": {"code": "json_validate_failed", "failed_generation": f"{V_GOOD}\n###\n{GOOD_REPLY}"}},
+    )
+    response = _fallback(fake_groq, gemini, failed)
+    assert response.json()["review"] == V_GOOD
+    assert len(fake_groq.calls) == 1 and gemini.calls == []
+
+
+def test_offer_as_a_verb_is_not_a_price():
+    assert review_rules.sentence_problem("I like the range of outfits they offer.", 4, None) is None
+    assert "price" in review_rules.sentence_problem("They had great offers.", 4, None)
+
+
+@pytest.mark.parametrize(
+    ("text", "rating", "experience", "expected"),
+    [
+        ("I got a dress altered here. Dresses looked nice.", 2, None, "I got an outfit altered here. Outfits looked nice."),
+        ("A lehenga caught my eye.", 4, None, "An outfit caught my eye."),
+        ("The suit fit perfectly. Perfect stitching.", 5, "Loved the suit.", "The suit fit really well. Great stitching."),
+        ("The dress was perfect.", 5, "Perfect dress!", "The dress was perfect."),  # their own words stay
+    ],
+)
+def test_unnamed_garments_and_hype_are_repaired_locally(text, rating, experience, expected):
+    assert review_rules.generalize_review(text, rating, experience) == expected
+
+
+def test_delay_wording_counts_as_the_customer_raising_timing():
+    assert review_rules.sentence_problem("The wait was really long.", 2, "Alteration took too long.") is None
+    assert "complaint" in review_rules.sentence_problem("The staff seemed uninterested.", 2, None)

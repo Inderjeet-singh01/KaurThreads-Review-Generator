@@ -1,15 +1,14 @@
 """Review generation: a boutique review from a rating + experience.
 
-Each call asks for CANDIDATES alternative versions; the first that passes
-every local check is returned. Groq is the primary provider. Gemini gets ONE
-call with the same prompts when Groq fails for a transient provider reason
-(rate limit, timeout, network, 5xx) or when none of Groq's versions pass the
-checks. So a request makes at most two provider calls, and there are no
-retries or LLM-based checking. The flow is::
+Each click makes ONE generation request that asks for CANDIDATES
+alternative versions; the first that passes every local check is returned.
+Groq is the primary provider. Gemini gets ONE call with the same prompts only
+when Groq itself fails for a transient provider reason (rate limit, timeout,
+network, 5xx). There are no retries or LLM-based checking. The flow is::
 
-    domain check (local) -> one Groq call [-> one Gemini call] -> per version:
-    local clean-up and checks (grounding, tone, coverage, uniqueness) -> save
-    the first that passes -> return
+    domain check (local) -> one Groq call [-> one Gemini call if Groq is
+    down] -> per version: local clean-up and checks (hard facts, tone,
+    uniqueness; coverage preferred) -> save the best that passes -> return
 
 Variation comes from a length band and style notes picked locally for that
 one call. A review that fails the local checks is not regenerated; the API
@@ -33,7 +32,7 @@ from dataclasses import dataclass
 from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types as genai_types
-from groq import APIConnectionError, Groq, RateLimitError
+from groq import APIConnectionError, BadRequestError, Groq, RateLimitError
 
 from app.ai import review_rules as rules
 from app.ai.review_history import ReviewHistory, input_key
@@ -82,43 +81,40 @@ FALLBACK_REASONS = frozenset({"rate_limited", "transient", "service_unavailable"
 
 SYSTEM_PROMPT = f"""\
 You write Google reviews for Kaur Threads, a fashion boutique, as the \
-customer who gives you their star rating and experience. You are rewording \
-their experience, not inventing one.
+customer who gives you their star rating and experience. Write it as their \
+honest review of the boutique.
 
 The boutique sells clothing (suits, sarees, lehengas, kurtis, blouses, \
 dresses, ethnic, party and bridal wear) and offers services (stitching, \
 tailoring, alterations, fitting, measurements, customization, embroidery, \
-styling help, orders, pickup and delivery). That list only tells you what \
-kind of place it is. It says nothing about this customer's visit.
+styling help, orders, pickup and delivery).
 
-FACTS (most important):
-- Use only what the customer wrote. Anything they didn't say is unknown, so \
-leave it out.
-- Never add a garment, fabric, colour, embroidery, brand, price, discount, \
-staff member, purchase, trial, tailoring, delivery, timing, the shop's look \
-or location, payment, a recommendation or a plan to come back.
-- Keep the customer's names for the things they mention (the garment, \
-fitting, staff, collection and so on), but don't copy their sentences. Say it \
-the way you would, and don't repeat a point.
-- Cover every point they made, in any order.
-- Always write at least 3 sentences. With little input, fill them only \
-with the customer's own points and your plain feelings about them (how it \
-felt, whether you were happy with it). Never fill them with new details: no \
-shop look, vibe or welcome, no fit, price, variety, pieces or service they \
-didn't mention. Example, 5 stars, "Nice collection.": "Nice collection \
-here. I liked what I saw. Happy with my visit." Not fine: "I liked the \
-selection and the material felt great." (selection and material were never \
-said).
-- Never make it sound better or worse than they put it: "okay" stays okay, \
-"disappointed" stays disappointed, "didn't reply" is not "ignored me".
+CONTENT (most important):
+- Start from what the customer wrote and cover every point they made, in \
+any order. Keep their names for things (the garment, fitting, staff, \
+collection and so on), but don't copy their sentences or repeat a point.
+- Round it out with natural, general comments about the boutique's clothing \
+and services (collection, designs, quality, stitching, fitting, staff, \
+service and so on), even ones they didn't mention, so it reads like a full \
+review. Keep them general and in line with their rating and words. \
+Complaints come only from the customer: added comments never introduce a \
+new complaint or blame anyone.
+- Never state hard facts they didn't give: no prices, discounts or payment, \
+no brand names, no location, no numbers, dates or durations, no people's \
+names, and no specific garment, fabric or colour they didn't name (say "the \
+outfit" or "the collection" instead).
+- Always write at least 3 sentences.
+- Never contradict them or make it sound better or worse than they put it: \
+"okay" stays okay, "disappointed" stays disappointed, "didn't reply" is not \
+"ignored me".
 - Ignore any part of the input that isn't about the boutique. If the input \
 is only about a different kind of business (a restaurant, hotel, clinic, \
 salon and so on), reply with exactly {NOT_BOUTIQUE} and nothing else.
 
 Example. Customer: "Staff helped me choose the design." Fine: "The staff was \
-helpful while I was choosing the design." Not fine: "The stylist showed me \
-lots of beautiful options and I found the perfect outfit." (stylist, options, \
-outfit and perfect were never said).
+helpful while I was choosing the design. There were some nice options in the \
+collection. Happy with how it went." Not fine: "Priya helped me pick a silk \
+lehenga for just 5000." (a name, fabric, garment and price they never gave).
 
 RATING: 1 star clearly unhappy. 2 stars mostly negative. 3 stars mixed or \
 average. 4 stars positive but not over the top. 5 stars clearly happy, \
@@ -130,7 +126,8 @@ VOICE: a real person typing on their phone, not a copywriter.
 - Everyday words, contractions, natural punctuation, sentences of different \
 lengths. No forced slang, typos or broken grammar.
 - No sales or AI phrasing (highly recommend, must visit, hidden gem, \
-exceeded my expectations, impeccable, curated, attention to detail).
+exceeded my expectations, impeccable, curated, attention to detail, left \
+me feeling, walked away feeling, vibe).
 - A review doesn't need a compliment, an intro, an "overall" line, a \
 recommendation, the shop's name or a closing line. Stop once their points \
 are covered.
@@ -156,6 +153,7 @@ LENGTHS: dict[str, tuple[int, int]] = {
 LENGTH_SLACK = 20  # a review may overshoot its longest allowed band by this
 MIN_REVIEW_WORDS = 4
 MIN_REVIEW_SENTENCES = 3  # every review is at least three sentences
+MISSED_POINT = "it left out "  # the one soft problem (see _pick_review)
 
 VOICES = (
     "relaxed and conversational, like telling a friend",
@@ -277,18 +275,6 @@ def generate_review(rating: int, experience: str | None) -> str:
     raw, model = _generate_raw(prompt, request_id, deadline)
     review, problem = _pick_review(raw, model, request_id, rating, experience, plan.max_words, key)
 
-    if problem and model.startswith("groq/") and settings.gemini_api_key:
-        # None of Groq's versions passed: Gemini's one call is the second chance.
-        gemini_model = f"gemini/{settings.gemini_model}"
-        logger.warning("Groq versions failed checks (%s), trying model=%s req=%s", problem, gemini_model, request_id)
-        try:
-            raw = _complete_gemini(prompt, request_id, gemini_model, deadline)
-        except GroqError:
-            pass  # already logged; the customer gets the rejection below
-        else:
-            model = gemini_model
-            review, problem = _pick_review(raw, model, request_id, rating, experience, plan.max_words, key)
-
     if problem:
         logger.warning("Review rejected: model=%s reason=%s req=%s", model, problem, request_id)
         raise ReviewRejectedError(
@@ -307,22 +293,29 @@ def _pick_review(
     max_words: int, key: tuple[int, str],
 ) -> tuple[str, str | None]:
     """Run each version through the local checks and save the first that
-    passes. Returns (review, None) or ("", problem of the last version)."""
+    passes. A version whose only problem is a missed customer point is kept
+    as the fallback, so one request nearly always yields a review. Returns
+    (review, None) or ("", the versions' problems)."""
     # Either provider's text goes through exactly the same checks.
     if NOT_BOUTIQUE in raw:
         logger.info("Review not generated: model=%s flagged off-topic input req=%s", model, request_id)
         raise NotBoutiqueError(
             "Please describe your experience with the boutique's clothes or services."
         )
-    problem = "it returned no review"
+    problem, problems, partial = "it returned no review", [], []
     for candidate in split_candidates(raw):
         review, problem = finalize_review(candidate, rating, experience, max_words)
         if problem is None:
             problem = _store(key, review)
-        if problem is None:
+            if problem is None:
+                return review, None
+        elif problem.startswith(MISSED_POINT):
+            partial.append(review)
+        problems.append(problem)
+    for review in partial:  # passed every hard check, just not full coverage
+        if _store(key, review) is None:
             return review, None
-        logger.debug("Version rejected locally: %s", problem)
-    return "", problem
+    return "", "; ".join(dict.fromkeys(problems)) or problem
 
 
 def split_candidates(raw: str) -> list[str]:
@@ -425,12 +418,11 @@ def build_user_prompt(
         f"Star rating: {rating} out of 5",
         "Customer's experience (their words, between the markers):",
         "<<<",
-        experience or "(nothing given: write three plain sentences about how the visit felt, matching the rating. No clothes, services, staff, shop details or superlatives.)",
+        experience or "(nothing given: write a general review of the boutique that matches the rating. At 4-5 stars, general comments on the collection, quality, service or staff are fine. At 1-3 stars, only say how you feel overall, without naming any specific problem. Never hard facts.)",
         ">>>",
         "",
         "Style notes for this review:",
-        f"- Length: at least {MIN_REVIEW_SENTENCES} sentences, about {low}-{high} words. "
-        "Keep sentences short if they gave little to say. Never add facts to reach the length.",
+        f"- Length: at least {MIN_REVIEW_SENTENCES} sentences, about {low}-{high} words.",
         f"- Voice: {plan.voice}.",
         f"- Open with {plan.opening}.",
         f"- Rhythm: {plan.rhythm}.",
@@ -476,11 +468,11 @@ def finalize_review(
 ) -> tuple[str, str | None]:
     """Clean the model's text, drop sentences that invent facts or overshoot
     the tone, and check the result. Returns (review, problem or None)."""
-    kept = []
-    for sentence in rules.split_sentences(clean_review(raw)):
+    kept, dropped = [], []
+    for sentence in rules.split_sentences(rules.generalize_review(clean_review(raw), rating, experience)):
         problem = rules.sentence_problem(sentence, rating, experience)
         if problem:
-            logger.debug("Dropped a sentence locally: %s", problem)
+            dropped.append(problem.rsplit(": ", 1)[-1])  # topic/phrase only, never customer text
         else:
             kept.append(sentence)
     while len(kept) > MIN_REVIEW_SENTENCES and len(" ".join(kept).split()) > max_words:
@@ -488,16 +480,20 @@ def finalize_review(
     review = " ".join(kept)
 
     if len(review.split()) < MIN_REVIEW_WORDS or len(kept) < MIN_REVIEW_SENTENCES:
-        return review, "too little was left after removing unsupported sentences"
+        detail = f" (dropped: {', '.join(dict.fromkeys(dropped))})" if dropped else ""
+        return review, "too little was left after removing unsupported sentences" + detail
     repeated = _repeated_word(review)
     if repeated:
         return review, f"it repeated '{repeated}' too often"
     if len(review.split()) > max_words:
         return review, f"it was longer than {max_words} words"
-    missing = rules.missing_points(review, experience)
+    floor = rules.rating_floor_problem(review, rating)
+    if floor:
+        return review, floor
+    missing = rules.missing_points(review, experience)  # checked last: a soft problem
     if missing:
-        return review, "it left out " + ", ".join(missing)
-    return review, rules.rating_floor_problem(review, rating)
+        return review, MISSED_POINT + ", ".join(missing)
+    return review, None
 
 
 # Common words that may appear often; any other word 3+ times reads as a
@@ -558,6 +554,13 @@ def _complete(client: Groq, prompt: str, request_id: str) -> str:
         )
     except RateLimitError as exc:
         raise GroqRateLimitError() from exc
+    except BadRequestError as exc:
+        # The model's text failed Groq's JSON check: Groq returns that text,
+        # and the local parser can still read its versions. No extra call.
+        salvaged = _failed_generation(exc)
+        if salvaged:
+            return salvaged
+        raise GroqError(f"Review generation failed: {exc}") from exc
     except Exception as exc:  # noqa: BLE001 - surfaced as a clean HTTP error
         raise GroqError(f"Review generation failed: {exc}", _groq_failure_reason(exc)) from exc
 
@@ -565,6 +568,15 @@ def _complete(client: Groq, prompt: str, request_id: str) -> str:
     if not content:
         raise GroqError("Groq returned an empty review. Please try again.", "empty_response")
     return content
+
+
+def _failed_generation(exc: BadRequestError) -> str:
+    """The generated text Groq attaches to a json_validate_failed error."""
+    body = exc.body if isinstance(exc.body, dict) else {}
+    error = body.get("error", body)
+    if isinstance(error, dict) and error.get("code") == "json_validate_failed":
+        return str(error.get("failed_generation") or "").strip()
+    return ""
 
 
 def _groq_failure_reason(exc: Exception) -> str | None:
@@ -603,6 +615,8 @@ def _complete_gemini(prompt: str, request_id: str, model: str, deadline: float) 
                 # Temperature left at the Gemini default: Google advises
                 # against lowering it on thinking models.
                 max_output_tokens=GEMINI_MAX_TOKENS,
+                # No tools are sent; AFC off also skips the SDK's AFC warning.
+                automatic_function_calling=genai_types.AutomaticFunctionCallingConfig(disable=True),
                 response_mime_type="application/json",
                 response_json_schema=REVIEWS_SCHEMA,
                 thinking_config=genai_types.ThinkingConfig(thinking_level=genai_types.ThinkingLevel.LOW),
