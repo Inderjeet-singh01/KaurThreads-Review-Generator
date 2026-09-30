@@ -1,5 +1,6 @@
 import RatingSelector from './RatingSelector.jsx'
 import { SparkleIcon, ArrowRightIcon } from './icons.jsx'
+import { STATUS_HINTS, STATUS_LABELS, cooldownLabel } from '../status.js'
 
 const MAX_CHARS = 300
 
@@ -10,6 +11,8 @@ export default function ReviewForm({
   onExperienceChange,
   onGenerate,
   loading,
+  status,
+  cooldown,
   error,
 }) {
   function handleTextChange(event) {
@@ -58,12 +61,19 @@ export default function ReviewForm({
         </p>
       )}
 
-      <button type="submit" className="btn btn--primary btn--block" disabled={loading}>
+      <button
+        type="submit"
+        className="btn btn--primary btn--block"
+        disabled={loading || cooldown > 0}
+        aria-busy={loading}
+      >
         {loading ? (
           <>
             <span className="spinner" aria-hidden="true" />
-            Generating your review...
+            {STATUS_LABELS[status] || STATUS_LABELS.generating}
           </>
+        ) : cooldown > 0 ? (
+          cooldownLabel(cooldown)
         ) : (
           <>
             <SparkleIcon width="20" height="20" />
@@ -72,6 +82,10 @@ export default function ReviewForm({
           </>
         )}
       </button>
+
+      <p className="form-status" role="status" aria-live="polite">
+        {loading ? STATUS_HINTS[status] : null}
+      </p>
     </form>
   )
 }

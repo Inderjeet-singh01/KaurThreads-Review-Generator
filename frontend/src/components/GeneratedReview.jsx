@@ -1,4 +1,9 @@
 import { SparkleIcon, GoogleIcon } from './icons.jsx'
+import { STATUS_HINTS, STATUS_LABELS, SUCCESS_MESSAGE, cooldownLabel } from '../status.js'
+
+// While regenerating, the button reads "Regenerating..." instead of the
+// form's "Generating your review...".
+const REGENERATE_LABELS = { ...STATUS_LABELS, generating: 'Regenerating...' }
 
 export default function GeneratedReview({
   review,
@@ -7,6 +12,8 @@ export default function GeneratedReview({
   onPostGoogle,
   onBack,
   loading,
+  status,
+  cooldown,
   error,
   postStatus,
   googleConfigured,
@@ -43,18 +50,25 @@ export default function GeneratedReview({
         </p>
       )}
 
+      <p className="form-status" role="status" aria-live="polite">
+        {loading ? STATUS_HINTS[status] : status === 'success' && !error ? SUCCESS_MESSAGE : null}
+      </p>
+
       <div className="generated__actions">
         <button
           type="button"
           className="btn btn--ghost"
           onClick={onRegenerate}
-          disabled={loading}
+          disabled={loading || cooldown > 0}
+          aria-busy={loading}
         >
           {loading ? (
             <>
               <span className="spinner spinner--dark" aria-hidden="true" />
-              Regenerating...
+              {REGENERATE_LABELS[status] || REGENERATE_LABELS.generating}
             </>
+          ) : cooldown > 0 ? (
+            cooldownLabel(cooldown)
           ) : (
             <>
               <SparkleIcon width="18" height="18" />

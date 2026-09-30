@@ -11,7 +11,7 @@ only a **draft** for the customer to edit and post themselves.
 
 ## What it does
 
-- Exposes a single endpoint: `POST /generate-review`.
+- Exposes one application endpoint, `POST /generate-review`, plus `GET /health`.
 - Uses Groq (model `openai/gpt-oss-120b`) to write one review that matches the
   chosen star rating and uses **only** the details the customer provides — it
   never invents products, staff, prices, discounts, services, or events.
@@ -84,18 +84,31 @@ Response:
 }
 ```
 
-Errors:
+Optional header: `Idempotency-Key` (8–64 letters, digits or `-`). The
+frontend sends one per click and resends it when it retries; a repeat that
+arrives while the first run is still going (or within 2 minutes of its
+success) gets that run's review instead of a new LLM call.
 
-- `400` — the experience is about something other than the boutique.
-- `409` — the generated review failed a local check (invented detail, wrong
-  tone, dropped point, or too close to an earlier review). Not regenerated;
-  the customer can press Regenerate.
+Errors have the body `{"detail": "<customer-safe text>", "code": "...",
+"retryable": true|false}` (plus `retry_after` and a `Retry-After` header on
+`429`/`503`). Internal error text is only written to the logs.
+
+- `400` `not_boutique` — the experience is about something other than the boutique.
+- `409` `review_rejected` — the generated reviews failed a local check
+  (invented detail, wrong tone, dropped point, or too close to an earlier
+  review), after one fresh retry. The customer can press Regenerate.
 - `422` — invalid input (rating out of 1–5, or experience too long).
-- `429` — Groq rate-limited the request. It is not retried; try again shortly.
-- `502` — the LLM call failed or returned nothing.
+- `429` `ai_busy` — Groq (and the Gemini fallback, if configured) is rate
+  limiting. A short Groq wait (≤4s) is waited out once by the backend;
+  otherwise `Retry-After` says how long to wait. Not retried automatically.
+- `503` `ai_unavailable` — temporary LLM failure (timeout, network, 5xx,
+  empty reply) after the fallback. Safe to retry.
+- `502` `ai_error` — permanent LLM failure (missing/invalid key, bad request,
+  unknown model). Retrying won't help; check the logs.
+- `500` `internal_error` — a bug; the traceback is in the logs.
 
-Each request makes at most **one** Groq call: no retries, regeneration or
-LLM-based checking. A word-length band and style notes are picked locally for
+A request makes at most **two** provider calls (see `app/ai/groq_client.py`)
+and no LLM-based checking. A word-length band and style notes are picked locally for
 that call; the result is then checked locally for grounding (no garments,
 staff, prices, delivery etc. the customer didn't mention), rating tone, and
 uniqueness against earlier accepted reviews.
@@ -103,6 +116,34 @@ uniqueness against earlier accepted reviews.
 Accepted reviews are stored in SQLite at `REVIEW_HISTORY_PATH` (default
 `data/review_history.sqlite3`). On a host with an ephemeral disk (e.g. Render
 without a persistent disk) this history resets on each deploy/restart.
+
+### `GET /health`
+
+Returns `{"status": "ok"}` (also answers `HEAD`). It does no LLM, database
+or other I/O, so it responds instantly once the process is up. Use it as the
+Render **Health Check Path**. It does not keep a Render Free instance awake:
+Free instances still sleep after 15 minutes without traffic.
+
+## Render cold starts
+
+On Render Free the backend sleeps when idle, and the first request after
+that waits while Render starts it again (often 30–60s). The frontend
+handles this (see `frontend/src/api.js`):
+
+1. On page load it pings `/health`, so the backend starts waking while the
+   customer picks a rating.
+2. On Generate, if the backend hasn't answered in the last 5 minutes, it
+   waits for `/health` first ("Connecting to AI service…", then "Starting AI
+   service…" if slow): 20s per attempt, 2s/4s/8s backoff, 75s at most.
+3. It then calls `/generate-review` (30s timeout) and retries only
+   transient failures: network errors, timeouts and 502/503/504 from
+   Render's proxy up to twice, a backend `503` once, with 2s/4s backoff and
+   the same `Idempotency-Key`. `400`, `409`, `422`, `429` and our `502`/`500`
+   are never retried.
+
+The Render logs show `Backend ready: startup took …s` for each boot and a
+`Review generation request started / completed / failed … took=…s` line
+per request (never the customer's text).
 
 ## Tests
 

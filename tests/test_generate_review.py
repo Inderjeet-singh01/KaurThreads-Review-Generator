@@ -166,11 +166,15 @@ def test_rate_limit_is_returned_not_retried(fake_groq):
 
 
 @pytest.mark.parametrize(
-    "failure",
-    [APITimeoutError(request=httpx.Request("POST", "https://api.groq.com")), RuntimeError("boom"), ""],
+    ("failure", "status"),
+    [(APITimeoutError(request=httpx.Request("POST", "https://api.groq.com")), 503), (RuntimeError("boom"), 502), ("", 503)],
+    ids=["timeout", "bug", "empty"],
 )
-def test_other_failures_are_returned_not_retried(fake_groq, failure):
-    assert _generate(fake_groq, 5, "Nice.", failure).status_code == 502
+def test_other_failures_are_returned_not_retried(fake_groq, failure, status):
+    # 503: temporary, the frontend may retry. 502: retrying won't help.
+    response = _generate(fake_groq, 5, "Nice.", failure)
+    assert response.status_code == status
+    assert response.json()["retryable"] is (status == 503)
 
 
 def test_missing_key_makes_no_call(fake_groq, monkeypatch):
@@ -513,12 +517,13 @@ def test_missing_groq_key_does_not_call_gemini(fake_groq, gemini, monkeypatch):
 @pytest.mark.parametrize(
     ("gemini_failure", "status"),
     [
-        (genai_errors.ServerError(503, {"error": {"message": "unavailable"}}), 502),
+        (genai_errors.ServerError(503, {"error": {"message": "unavailable"}}), 503),
         (genai_errors.ClientError(429, {"error": {"message": "quota"}}), 429),
-        (TimeoutError("read timed out"), 502),
-        ("", 502),
+        (genai_errors.ClientError(400, {"error": {"message": "bad request"}}), 502),
+        (TimeoutError("read timed out"), 503),
+        ("", 503),
     ],
-    ids=["503", "429", "timeout", "empty"],
+    ids=["503", "429", "400", "timeout", "empty"],
 )
 def test_gemini_failure_is_a_controlled_error(fake_groq, gemini, gemini_failure, status):
     groq_429 = RateLimitError("rate limited", response=_groq_response(429), body=None)
@@ -768,3 +773,107 @@ def test_groq_wait_that_would_break_the_deadline_goes_to_gemini(fake_groq, gemin
 )
 def test_mild_three_star_wording_is_not_an_invented_complaint(sentence):
     assert review_rules.sentence_problem(sentence, 3, None) is None
+
+
+# --- Reliability: health, error contract, duplicate requests -----------------
+
+
+def test_health_is_instant_and_calls_nothing(fake_groq, gemini):
+    assert client.get("/health").json() == {"status": "ok"}
+    assert client.head("/health").status_code == 200
+    assert fake_groq.calls == [] and gemini.calls == []
+
+
+def test_rate_limit_tells_the_frontend_how_long_to_wait(fake_groq, sleeps):
+    fake_groq.replies = [_groq_busy(retry_after="7.2")]
+    response = _post()
+    assert response.status_code == 429
+    assert response.headers["retry-after"] == "8"
+    assert response.json() == {
+        "detail": "The AI service is temporarily busy. Please wait a few seconds and try again.",
+        "code": "ai_busy", "retryable": False, "retry_after": 8,
+    }
+    assert len(fake_groq.calls) == 1  # a long wait is not waited out, nor retried
+
+
+def test_rate_limit_without_a_wait_gets_a_default_retry_after(fake_groq):
+    fake_groq.replies = [_groq_busy()]
+    assert _post().headers["retry-after"] == "10"
+
+
+def test_internal_error_text_never_reaches_the_customer(fake_groq):
+    fake_groq.replies = [AuthenticationError("invalid api key gsk_secret", response=_groq_response(401), body=None)]
+    response = _post()
+    assert response.status_code == 502
+    assert "gsk_secret" not in response.text and response.json()["retryable"] is False
+
+
+def test_validation_error_is_not_retryable_and_makes_no_call(fake_groq):
+    response = client.post("/generate-review", json={"rating": 9})
+    assert response.status_code == 422
+    assert fake_groq.calls == []
+
+
+def test_unexpected_crash_is_logged_and_answered_with_cors(fake_groq, monkeypatch, caplog):
+    def crash(*args, **kwargs):
+        raise KeyError("oops")
+
+    monkeypatch.setattr("app.main.generate_review", crash)
+    response = client.post(
+        "/generate-review", json={"rating": 5}, headers={"Origin": "http://localhost:5173"}
+    )
+    assert response.status_code == 500 and response.json()["code"] == "internal_error"
+    assert "oops" not in response.text
+    assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
+    assert any(r.exc_info and "crashed" in r.getMessage() for r in caplog.records)  # traceback logged
+
+
+def test_repeated_idempotency_key_reuses_the_review_without_a_new_call(fake_groq):
+    fake_groq.replies = [GOOD_REPLY]
+    headers = {"Idempotency-Key": "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f"}
+    body = {"rating": 5, "experience": "Good collection and nice quality."}
+    first = client.post("/generate-review", json=body, headers=headers)
+    retry = client.post("/generate-review", json=body, headers=headers)
+    assert first.status_code == retry.status_code == 200
+    assert retry.json() == first.json()
+    assert len(fake_groq.calls) == 1
+
+
+def test_new_click_gets_a_new_generation(fake_groq):
+    fake_groq.replies = [GOOD_REPLY, "Pretty good quality, and there was a decent collection to look through. Happy with it. Just sharing my experience."]
+    body = {"rating": 5, "experience": "Good collection and nice quality."}
+    for key in ("aaaaaaaa-1111", "bbbbbbbb-2222"):
+        assert client.post("/generate-review", json=body, headers={"Idempotency-Key": key}).status_code == 200
+    assert len(fake_groq.calls) == 2
+
+
+def test_failed_run_is_not_cached_so_a_retry_runs_again(fake_groq):
+    fake_groq.replies = [APITimeoutError(request=httpx.Request("POST", "https://api.groq.com")), GOOD_REPLY]
+    headers = {"Idempotency-Key": "cccccccc-3333"}
+    assert _post_with(headers).status_code == 503
+    assert _post_with(headers).status_code == 200
+    assert len(fake_groq.calls) == 2
+
+
+def _post_with(headers):
+    return client.post("/generate-review", json={"rating": 5, "experience": "Good collection and nice quality."}, headers=headers)
+
+
+def test_concurrent_duplicates_share_one_run():
+    import threading
+    from app.idempotency import RequestDeduplicator
+
+    dedupe, release, calls, results = RequestDeduplicator(), threading.Event(), [], []
+
+    def slow():
+        calls.append(1)
+        release.wait(2)
+        return "review"
+
+    threads = [threading.Thread(target=lambda: results.append(dedupe.run("k", slow))) for _ in range(3)]
+    for t in threads:
+        t.start()
+    release.set()
+    for t in threads:
+        t.join()
+    assert calls == [1] and results == ["review"] * 3

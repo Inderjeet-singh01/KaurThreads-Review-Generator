@@ -30,11 +30,18 @@ Both are **required** and must never be hardcoded in source.
 
 ## How it connects to the backend
 
-- One request only: `POST {VITE_API_BASE_URL}/generate-review` with body
-  `{ "rating": <1-5>, "experience": <string|null> }`.
+- `POST {VITE_API_BASE_URL}/generate-review` with body
+  `{ "rating": <1-5>, "experience": <string|null> }` and an `Idempotency-Key`
+  header (one per click), plus `GET /health` to wake the backend.
 - Uses the `review` field of the JSON response as the editable draft.
-- Handles loading, network/timeout (20s abort), non-2xx, and invalid responses
-  with a single customer-safe message — backend error details are never shown.
+- Handles Render cold starts: pings `/health` on page load, waits for it
+  before generating (up to 75s, shown as "Starting AI service…"), and
+  retries only transient failures a limited number of times with backoff.
+  See the "Render cold starts" section of the root README.
+- The Generate/Regenerate button is disabled for the whole request
+  (including retries), and for the `Retry-After` wait after a `429`.
+- Errors are mapped to customer-safe messages — backend error details are
+  never shown.
 - **Post on Google** is a real link that lands on Google's stars + review box.
   From the place id it builds `https://www.google.com/maps/place//data=!4m3!3m2!1s<feature id>!12e1`
   (the link Google's own review short link resolves to; `!12e1` opens the

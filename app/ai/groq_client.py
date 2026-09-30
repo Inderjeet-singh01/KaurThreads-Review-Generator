@@ -37,10 +37,11 @@ from collections import defaultdict, deque
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+import httpx
 from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types as genai_types
-from groq import APIConnectionError, BadRequestError, Groq, RateLimitError
+from groq import APIConnectionError, APIError, BadRequestError, Groq, RateLimitError
 
 from app.ai import review_rules as rules
 from app.ai.review_history import ReviewHistory, input_key
@@ -202,8 +203,8 @@ TEMPERATURE = 0.85
 CANDIDATES = 3
 MAX_TOKENS = 1000  # three ~100-word versions plus low-effort reasoning
 GEMINI_MAX_TOKENS = 1200  # Gemini counts its (low) thinking in this budget
-# The frontend aborts after 20s, so Groq + a Gemini call share one deadline:
-# Groq gets at most CALL_TIMEOUT_SECONDS, Gemini whatever time is left.
+# Groq + a Gemini call share one deadline (the frontend waits up to 30s per
+# attempt): Groq gets at most CALL_TIMEOUT_SECONDS, Gemini what is left.
 CALL_TIMEOUT_SECONDS = 8.0
 REQUEST_BUDGET_SECONDS = 18.0
 MIN_GEMINI_SECONDS = 4.0  # less than this left: skip Gemini, it can't finish
@@ -258,16 +259,18 @@ class ReviewPlan:
         return LENGTHS[self.length]
 
 
-def generate_review(rating: int, experience: str | None) -> str:
+def generate_review(rating: int, experience: str | None, request_id: str | None = None) -> str:
     """Generate one review: one Groq call, plus one Gemini call only when
     Groq fails transiently.
 
     Raises :class:`NotBoutiqueError` for off-topic input,
     :class:`ReviewRejectedError` when the generated review fails a local
     check, :class:`GroqRateLimitError` on HTTP 429 and :class:`GroqError` on
-    any other configuration/API failure. Nothing is retried.
+    any other configuration/API failure. ``request_id`` ties these logs to
+    the API request's.
     """
     if not settings.groq_api_key:
+        logger.error("Review not generated: GROQ_API_KEY is not configured")
         raise GroqError(
             "GROQ_API_KEY is not configured. Set it in the .env file to "
             "enable review generation."
@@ -278,7 +281,7 @@ def generate_review(rating: int, experience: str | None) -> str:
             "Please describe your experience with the boutique's clothes or services."
         )
 
-    request_id = uuid.uuid4().hex[:12]
+    request_id = request_id or uuid.uuid4().hex[:12]
     key = input_key(rating, experience)
     started = time.monotonic()
     deadline = started + REQUEST_BUDGET_SECONDS
@@ -587,6 +590,9 @@ def _store(key: tuple[int, str], review: str) -> str | None:
 
 
 def _complete(client: Groq, prompt: str, request_id: str, timeout: float = CALL_TIMEOUT_SECONDS) -> str:
+    model = f"groq/{settings.groq_model}"
+    logger.info("LLM request sent model=%s timeout=%.1fs req=%s", model, timeout, request_id)
+    started = time.monotonic()
     try:
         response = client.chat.completions.create(
             model=settings.groq_model,
@@ -606,7 +612,9 @@ def _complete(client: Groq, prompt: str, request_id: str, timeout: float = CALL_
             timeout=timeout,
         )
     except RateLimitError as exc:
-        raise GroqRateLimitError(retry_after=_retry_after(exc)) from exc
+        retry_after = _retry_after(exc)
+        logger.warning("Groq rate limit detected (429) retry_after=%s req=%s", retry_after, request_id)
+        raise GroqRateLimitError(retry_after=retry_after) from exc
     except BadRequestError as exc:
         # The model's text failed Groq's JSON check: Groq returns that text,
         # and the local parser can still read its versions. No extra call.
@@ -615,8 +623,17 @@ def _complete(client: Groq, prompt: str, request_id: str, timeout: float = CALL_
             return salvaged
         raise GroqError(f"Review generation failed: {exc}") from exc
     except Exception as exc:  # noqa: BLE001 - surfaced as a clean HTTP error
-        raise GroqError(f"Review generation failed: {exc}", _groq_failure_reason(exc)) from exc
+        reason = _groq_failure_reason(exc)
+        if isinstance(exc, APIError):
+            logger.warning(
+                "LLM request failed model=%s reason=%s took=%.1fs error=%s req=%s",
+                model, reason, time.monotonic() - started, _short(exc), request_id,
+            )
+        else:  # not an API answer: a bug, so keep the traceback
+            logger.exception("LLM request raised unexpectedly model=%s req=%s", model, request_id)
+        raise GroqError(f"Review generation failed: {exc}", reason) from exc
 
+    logger.info("LLM request completed model=%s took=%.1fs req=%s", model, time.monotonic() - started, request_id)
     content = (response.choices[0].message.content or "").strip()
     if not content:
         raise GroqError("Groq returned an empty review. Please try again.", "empty_response")
@@ -668,7 +685,9 @@ def _complete_gemini(prompt: str, request_id: str, model: str, deadline: float) 
     seconds_left = deadline - time.monotonic()
     if seconds_left < MIN_GEMINI_SECONDS:
         logger.error("Review failed: model=%s skipped, only %.1fs left req=%s", model, seconds_left, request_id)
-        raise GroqError("Review generation took too long. Please try again.")
+        raise GroqError("Review generation took too long. Please try again.", "transient")
+    logger.info("LLM request sent model=%s timeout=%.1fs req=%s", model, seconds_left, request_id)
+    started = time.monotonic()
     try:
         client = genai.Client(
             api_key=settings.gemini_api_key,
@@ -696,13 +715,19 @@ def _complete_gemini(prompt: str, request_id: str, model: str, deadline: float) 
     except genai_errors.APIError as exc:
         logger.error("Review failed: model=%s status=%s error=%s req=%s", model, exc.code, _short(exc.message or exc), request_id)
         if exc.code == 429:
+            logger.warning("Gemini rate limit detected (429) req=%s", request_id)
             raise GroqRateLimitError(reason=None) from exc
-        raise GroqError(f"Review generation failed: {exc}") from exc
-    except Exception as exc:  # noqa: BLE001 - surfaced as a clean HTTP error
+        transient = exc.code == 408 or (isinstance(exc.code, int) and exc.code >= 500)
+        raise GroqError(f"Review generation failed: {exc}", "service_unavailable" if transient else None) from exc
+    except (TimeoutError, ConnectionError, httpx.TransportError) as exc:
         logger.error("Review failed: model=%s error=%s req=%s", model, _short(exc), request_id)
+        raise GroqError(f"Review generation failed: {exc}", "transient") from exc
+    except Exception as exc:  # noqa: BLE001 - surfaced as a clean HTTP error
+        logger.exception("Review failed: model=%s raised unexpectedly req=%s", model, request_id)
         raise GroqError(f"Review generation failed: {exc}") from exc
 
+    logger.info("LLM request completed model=%s took=%.1fs req=%s", model, time.monotonic() - started, request_id)
     if not content:
         logger.error("Review failed: model=%s error=empty response req=%s", model, request_id)
-        raise GroqError("Review generation returned an empty review. Please try again.")
+        raise GroqError("Review generation returned an empty review. Please try again.", "empty_response")
     return content

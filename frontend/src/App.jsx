@@ -1,16 +1,17 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Header from './components/Header.jsx'
 import Hero from './components/Hero.jsx'
 import ReviewForm from './components/ReviewForm.jsx'
 import GeneratedReview from './components/GeneratedReview.jsx'
 import ClosingSection from './components/ClosingSection.jsx'
 import ContactLinks from './components/ContactLinks.jsx'
-import { generateReview, GENERIC_ERROR, GOOGLE_REVIEW_URL } from './api.js'
+import { generateReview, GENERIC_ERROR, GOOGLE_REVIEW_URL, warmUpBackend } from './api.js'
 import { copyText } from './clipboard.js'
 import { googleReviewLink } from './googleReview.js'
 
 const NO_RATING_ERROR = 'Please select a rating first.'
 const EMPTY_REVIEW_ERROR = 'Please generate or write your review first.'
+const MAX_COOLDOWN_SECONDS = 30
 
 export default function App() {
   const [rating, setRating] = useState(0)
@@ -20,6 +21,11 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [postStatus, setPostStatus] = useState(null) // 'copied' | 'manual' | null
+  // 'connecting' | 'waking' | 'generating' | 'retrying' while loading,
+  // 'success' after a review arrives, '' otherwise.
+  const [status, setStatus] = useState('')
+  // After a 429, Generate stays disabled for the backend's Retry-After.
+  const [cooldown, setCooldown] = useState(0) // seconds left
 
   const googleConfigured = Boolean(GOOGLE_REVIEW_URL)
   const googleLink = googleReviewLink()
@@ -27,8 +33,20 @@ export default function App() {
   // before the disabled button re-renders: one click, one POST.
   const generatingRef = useRef(false)
 
+  // Wake the backend (Render may have put it to sleep) while the customer
+  // is still choosing a rating, so Generate is usually instant.
+  useEffect(() => {
+    warmUpBackend()
+  }, [])
+
+  useEffect(() => {
+    if (cooldown <= 0) return undefined
+    const timer = setTimeout(() => setCooldown((s) => s - 1), 1000)
+    return () => clearTimeout(timer)
+  }, [cooldown])
+
   async function runGenerate() {
-    if (generatingRef.current) return
+    if (generatingRef.current || cooldown > 0) return
     if (!rating) {
       setError(NO_RATING_ERROR)
       return
@@ -36,13 +54,17 @@ export default function App() {
     generatingRef.current = true
     setError('')
     setPostStatus(null)
+    setStatus('generating')
     setLoading(true)
     try {
-      const text = await generateReview({ rating, experience })
+      const text = await generateReview({ rating, experience, onStatus: setStatus })
       setReview(text)
       setPhase('result')
+      setStatus('success')
     } catch (err) {
+      setStatus('')
       setError(err?.message || GENERIC_ERROR)
+      if (err?.retryAfter) setCooldown(Math.min(Math.ceil(err.retryAfter), MAX_COOLDOWN_SECONDS))
     } finally {
       generatingRef.current = false
       setLoading(false)
@@ -56,6 +78,7 @@ export default function App() {
 
   function handleReviewChange(value) {
     setReview(value)
+    if (status === 'success') setStatus('')
     if (error === EMPTY_REVIEW_ERROR) setError('')
   }
 
@@ -93,6 +116,7 @@ export default function App() {
 
   function handleBack() {
     setPhase('form')
+    setStatus('')
     setError('')
     setPostStatus(null)
   }
@@ -113,6 +137,8 @@ export default function App() {
               onExperienceChange={setExperience}
               onGenerate={runGenerate}
               loading={loading}
+              status={status}
+              cooldown={cooldown}
               error={error}
             />
           ) : (
@@ -124,6 +150,8 @@ export default function App() {
                 onPostGoogle={handlePostGoogle}
                 onBack={handleBack}
                 loading={loading}
+                status={status}
+                cooldown={cooldown}
                 error={error}
                 postStatus={postStatus}
                 googleConfigured={googleConfigured}

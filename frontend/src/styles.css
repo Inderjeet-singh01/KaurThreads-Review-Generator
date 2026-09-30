@@ -771,6 +771,13 @@ img {
   font-size: 13px;
 }
 
+.form-status:not(:empty) {
+  margin: 12px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+  text-align: center;
+}
+
 .form-note {
   margin: 12px 0 0;
   font-size: 12px;
