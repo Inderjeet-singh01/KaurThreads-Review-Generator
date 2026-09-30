@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     # never posts to Google. Configured here as the single source of truth.
     google_review_url: str = ""
 
+    # --- Review history ---------------------------------------------------
+    # SQLite file of accepted reviews, used to keep every new review unique
+    # across restarts. Point it at a persistent disk in production, or use
+    # ":memory:" to keep history only for the life of the process.
+    review_history_path: str = str(PROJECT_ROOT / "data" / "review_history.sqlite3")
+
     # --- CORS -------------------------------------------------------------
     # Comma-separated browser origins allowed to call this API. Defaults
     # cover the local Vite dev server so a future frontend works out of the

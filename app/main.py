@@ -11,7 +11,13 @@ import logging
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.ai.groq_client import GroqError, generate_review
+from app.ai.groq_client import (
+    GroqError,
+    GroqRateLimitError,
+    NotBoutiqueError,
+    ReviewRejectedError,
+    generate_review,
+)
 from app.config import settings
 from app.google_review import get_google_review_url
 from app.schemas import GenerateReviewRequest, GenerateReviewResponse
@@ -50,6 +56,12 @@ def generate_review_endpoint(
     """Generate a natural review from a 1-5 rating and optional experience."""
     try:
         review = generate_review(payload.rating, payload.experience)
+    except NotBoutiqueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ReviewRejectedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except GroqRateLimitError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
     except GroqError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
