@@ -5,6 +5,9 @@ uvicorn>=0.30
 # Groq API (AI review generation) — same provider/model as Review Reply AI
 groq>=0.13
 
+# Google Gemini (fallback when a Groq call fails transiently)
+google-genai>=2.0
+
 # API contracts / configuration
 pydantic>=2.7
 pydantic-settings>=2.3

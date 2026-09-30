@@ -26,6 +26,9 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
+# The HTTP clients log every request at INFO; keep only their warnings.
+for _noisy in ("httpx", "google_genai"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(

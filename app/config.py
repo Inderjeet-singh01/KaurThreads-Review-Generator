@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     groq_model: str = "openai/gpt-oss-120b"
 
+    # --- Gemini (fallback when a Groq call fails transiently) -------------
+    # Leave GEMINI_API_KEY empty to disable the fallback.
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-3.8-flash"
+
     # --- Google review page -----------------------------------------------
     # Public "write a review" URL for Kaur Threads Boutique. The customer
     # submits the review themselves on Google using this link; the backend

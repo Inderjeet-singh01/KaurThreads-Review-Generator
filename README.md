@@ -86,8 +86,23 @@ Response:
 
 Errors:
 
+- `400` — the experience is about something other than the boutique.
+- `409` — the generated review failed a local check (invented detail, wrong
+  tone, dropped point, or too close to an earlier review). Not regenerated;
+  the customer can press Regenerate.
 - `422` — invalid input (rating out of 1–5, or experience too long).
+- `429` — Groq rate-limited the request. It is not retried; try again shortly.
 - `502` — the LLM call failed or returned nothing.
+
+Each request makes at most **one** Groq call: no retries, regeneration or
+LLM-based checking. A word-length band and style notes are picked locally for
+that call; the result is then checked locally for grounding (no garments,
+staff, prices, delivery etc. the customer didn't mention), rating tone, and
+uniqueness against earlier accepted reviews.
+
+Accepted reviews are stored in SQLite at `REVIEW_HISTORY_PATH` (default
+`data/review_history.sqlite3`). On a host with an ephemeral disk (e.g. Render
+without a persistent disk) this history resets on each deploy/restart.
 
 ## Tests
 

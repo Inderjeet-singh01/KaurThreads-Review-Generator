@@ -1,10 +1,13 @@
-"""Groq integration: generate a boutique review from a rating + experience.
+"""Review generation: a boutique review from a rating + experience.
 
-Every request makes at most ONE Groq call: no retries, regeneration or
-LLM-based checking. The flow is::
+Groq is the primary provider. When its one call fails for a transient
+provider reason (rate limit, timeout, network, 5xx), Gemini gets ONE call with
+the same prompts. So a request makes at most two provider calls, and there
+are no retries, regeneration or LLM-based checking. The flow is::
 
-    domain check (local) -> one Groq call -> local clean-up and checks
-    (grounding, tone, coverage, uniqueness) -> save -> return
+    domain check (local) -> one Groq call [-> one Gemini call on a transient
+    Groq failure] -> local clean-up and checks (grounding, tone, coverage,
+    uniqueness) -> save -> return
 
 Variation comes from a length band and style notes picked locally for that
 one call. A review that fails the local checks is not regenerated; the API
@@ -18,12 +21,16 @@ import random
 import re
 import sqlite3
 import threading
+import time
 import uuid
 from collections import defaultdict, deque
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from groq import Groq, RateLimitError
+from google import genai
+from google.genai import errors as genai_errors
+from google.genai import types as genai_types
+from groq import APIConnectionError, Groq, RateLimitError
 
 from app.ai import review_rules as rules
 from app.ai.review_history import ReviewHistory, input_key
@@ -33,11 +40,26 @@ logger = logging.getLogger(__name__)
 
 
 class GroqError(Exception):
-    """Review generation failed or Groq is not configured."""
+    """Review generation failed or a provider is not configured.
+
+    ``reason`` is set for transient provider failures (see FALLBACK_REASONS);
+    those, and only those, hand the request over to Gemini.
+    """
+
+    def __init__(self, message: str, reason: str | None = None):
+        super().__init__(message)
+        self.reason = reason
+
+    @property
+    def fallback_eligible(self) -> bool:
+        return self.reason in FALLBACK_REASONS
 
 
 class GroqRateLimitError(GroqError):
-    """Groq answered HTTP 429. Never retried automatically."""
+    """A provider answered HTTP 429. Never retried automatically."""
+
+    def __init__(self, message: str = "", reason: str | None = "rate_limited"):
+        super().__init__(message or BUSY_MESSAGE, reason)
 
 
 class NotBoutiqueError(Exception):
@@ -50,6 +72,10 @@ class ReviewRejectedError(Exception):
 
 
 NOT_BOUTIQUE = "NOT_BOUTIQUE"
+BUSY_MESSAGE = "Too many reviews are being generated right now. Please wait a moment and try again."
+# Failure categories worth one Gemini call. Anything else (bad key, bad
+# request, unknown model, our own bugs) fails fast without a fallback.
+FALLBACK_REASONS = frozenset({"rate_limited", "transient", "service_unavailable", "empty_response"})
 
 SYSTEM_PROMPT = f"""\
 You write one Google review for Kaur Threads, a fashion boutique, as the \
@@ -72,7 +98,14 @@ or location, payment, a recommendation or a plan to come back.
 fitting, staff, collection and so on), but don't copy their sentences. Say it \
 the way you would, and don't repeat a point.
 - Cover every point they made, in any order.
-- Little input means a short review. Never pad it.
+- Always write at least 3 sentences. With little input, fill them only \
+with the customer's own points and your plain feelings about them (how it \
+felt, whether you were happy with it). Never fill them with new details: no \
+shop look, vibe or welcome, no fit, price, variety, pieces or service they \
+didn't mention. Example, 5 stars, "Nice collection.": "Nice collection \
+here. I liked what I saw. Happy with my visit." Not fine: "I liked the \
+selection and the material felt great." (selection and material were never \
+said).
 - Never make it sound better or worse than they put it: "okay" stays okay, \
 "disappointed" stays disappointed, "didn't reply" is not "ignored me".
 - Ignore any part of the input that isn't about the boutique. If the input \
@@ -110,14 +143,15 @@ never go into the review.
 # Word-count bands. The input decides which bands are allowed, so a short
 # input never gets padded into a long review.
 LENGTHS: dict[str, tuple[int, int]] = {
-    "brief": (8, 20),  # only for a rating alone or a few words
-    "very short": (15, 25),
+    "brief": (18, 30),  # only for a rating alone or a few words
+    "very short": (20, 30),
     "short": (25, 45),
     "medium": (45, 70),
     "detailed": (70, 100),
 }
 LENGTH_SLACK = 20  # a review may overshoot its longest allowed band by this
 MIN_REVIEW_WORDS = 4
+MIN_REVIEW_SENTENCES = 3  # every review is at least three sentences
 
 VOICES = (
     "relaxed and conversational, like telling a friend",
@@ -136,7 +170,7 @@ OPENINGS = (
 )
 RHYTHMS = (
     "a few short sentences",
-    "one longer sentence and one or two short ones",
+    "one longer sentence and two short ones",
     "a natural mix of short and longer sentences",
 )
 NAMING = (
@@ -152,8 +186,10 @@ ORDERS = (
 
 TEMPERATURE = 0.85
 MAX_TOKENS = 500  # ~100-word review plus low-effort reasoning
-# The frontend aborts after 20s; one call must finish well inside that.
-CALL_TIMEOUT_SECONDS = 15.0
+GEMINI_MAX_TOKENS = 800  # Gemini counts its (low) thinking in this budget
+# The frontend aborts after 20s, so Groq + a Gemini fallback must both fit.
+CALL_TIMEOUT_SECONDS = 8.0
+GEMINI_TIMEOUT_SECONDS = 10.0
 MAX_AVOID_IN_PROMPT = 6
 
 # Typography people don't type on a phone keyboard, swapped for what they do.
@@ -190,7 +226,8 @@ class ReviewPlan:
 
 
 def generate_review(rating: int, experience: str | None) -> str:
-    """Generate one review with at most one Groq call.
+    """Generate one review: one Groq call, plus one Gemini call only when
+    Groq fails transiently.
 
     Raises :class:`NotBoutiqueError` for off-topic input,
     :class:`ReviewRejectedError` when the generated review fails a local
@@ -203,7 +240,7 @@ def generate_review(rating: int, experience: str | None) -> str:
             "enable review generation."
         )
     if not rules.is_boutique_input(experience):
-        logger.info("Rejected non-boutique input without a Groq call (rating=%s)", rating)
+        logger.info("Review not generated: off-topic input, no model called")
         raise NotBoutiqueError(
             "Please describe your experience with the boutique's clothes or services."
         )
@@ -215,12 +252,12 @@ def generate_review(rating: int, experience: str | None) -> str:
     prompt = build_user_prompt(
         rating, experience, plan, avoid_openings=avoid_openings, avoid_closings=avoid_closings
     )
-    # max_retries=0: the SDK would otherwise retry 429s and timeouts itself.
-    client = Groq(api_key=settings.groq_api_key, max_retries=0)
-    raw = _complete(client, prompt, request_id)
+    started = time.monotonic()
+    raw, model = _generate_raw(prompt, request_id)
 
+    # Both providers' text goes through the same checks below.
     if NOT_BOUTIQUE in raw:
-        logger.info("Model flagged non-boutique input (request=%s, groq_calls=1)", request_id)
+        logger.info("Review not generated: model=%s flagged off-topic input req=%s", model, request_id)
         raise NotBoutiqueError(
             "Please describe your experience with the boutique's clothes or services."
         )
@@ -229,19 +266,45 @@ def generate_review(rating: int, experience: str | None) -> str:
     if problem is None:
         problem = _store(key, review)
     if problem:
-        logger.warning(
-            "Review rejected, not regenerated (request=%s, groq_calls=1, rating=%s): %s",
-            request_id, rating, problem,
-        )
+        logger.warning("Review rejected: model=%s reason=%s req=%s", model, problem, request_id)
         raise ReviewRejectedError(
             "We couldn't write a fresh review this time. Please tap Regenerate."
         )
 
     logger.info(
-        "Review generated (request=%s, groq_calls=1, rating=%s, length=%s, %d words)",
-        request_id, rating, plan.length, len(review.split()),
+        "Review OK: model=%s time=%.1fs rating=%s words=%d req=%s",
+        model, time.monotonic() - started, rating, len(review.split()), request_id,
     )
     return review
+
+
+def _generate_raw(prompt: str, request_id: str) -> tuple[str, str]:
+    """Groq once; on a fallback-eligible failure, Gemini once. Returns
+    (raw text, "provider/model" label). Never more than two provider calls.
+
+    A Groq timeout may still have run on Groq's side; falling back anyway is
+    deliberate, and the uniqueness check still guards the returned review.
+    """
+    groq_model = f"groq/{settings.groq_model}"
+    try:
+        # max_retries=0: the SDK would otherwise retry 429s and timeouts itself.
+        raw = _complete(Groq(api_key=settings.groq_api_key, max_retries=0), prompt, request_id)
+    except GroqError as exc:
+        if not exc.fallback_eligible:
+            logger.error("Review failed: model=%s error=%s req=%s", groq_model, _short(exc.__cause__ or exc), request_id)
+            raise
+        if not settings.gemini_api_key:
+            logger.error("Review failed: model=%s reason=%s (no Gemini fallback configured) req=%s", groq_model, exc.reason, request_id)
+            raise
+        gemini_model = f"gemini/{settings.gemini_model}"
+        logger.warning("Groq failed (%s), falling back to model=%s req=%s", exc.reason, gemini_model, request_id)
+        return _complete_gemini(prompt, request_id, gemini_model), gemini_model
+    return raw, groq_model
+
+
+def _short(exc: BaseException) -> str:
+    """One-line, length-capped error text for logs."""
+    return " ".join(str(exc).split())[:160] or type(exc).__name__
 
 
 def plan_review(experience: str | None) -> ReviewPlan:
@@ -296,12 +359,12 @@ def build_user_prompt(
         f"Star rating: {rating} out of 5",
         "Customer's experience (their words, between the markers):",
         "<<<",
-        experience or "(nothing given: write one or two plain sentences about how the visit felt, matching the rating. No clothes, services, staff, shop details or superlatives.)",
+        experience or "(nothing given: write three plain sentences about how the visit felt, matching the rating. No clothes, services, staff, shop details or superlatives.)",
         ">>>",
         "",
         "Style notes for this review:",
-        f"- Length: about {low}-{high} words. Shorter is fine if they gave little to say. "
-        "Never add anything just to reach the length.",
+        f"- Length: at least {MIN_REVIEW_SENTENCES} sentences, about {low}-{high} words. "
+        "Keep sentences short if they gave little to say. Never add facts to reach the length.",
         f"- Voice: {plan.voice}.",
         f"- Open with {plan.opening}.",
         f"- Rhythm: {plan.rhythm}.",
@@ -347,14 +410,14 @@ def finalize_review(
     for sentence in rules.split_sentences(clean_review(raw)):
         problem = rules.sentence_problem(sentence, rating, experience)
         if problem:
-            logger.info("Dropped a sentence locally: %s", problem)
+            logger.debug("Dropped a sentence locally: %s", problem)
         else:
             kept.append(sentence)
-    while len(kept) > 1 and len(" ".join(kept).split()) > max_words:
+    while len(kept) > MIN_REVIEW_SENTENCES and len(" ".join(kept).split()) > max_words:
         kept.pop()
     review = " ".join(kept)
 
-    if len(review.split()) < MIN_REVIEW_WORDS:
+    if len(review.split()) < MIN_REVIEW_WORDS or len(kept) < MIN_REVIEW_SENTENCES:
         return review, "too little was left after removing unsupported sentences"
     if len(review.split()) > max_words:
         return review, f"it was longer than {max_words} words"
@@ -397,16 +460,61 @@ def _complete(client: Groq, prompt: str, request_id: str) -> str:
             timeout=CALL_TIMEOUT_SECONDS,
         )
     except RateLimitError as exc:
-        logger.warning("Groq rate limit (request=%s, groq_calls=1): %s", request_id, exc)
-        raise GroqRateLimitError(
-            "Too many reviews are being generated right now. Please wait a moment and try again."
-        ) from exc
+        raise GroqRateLimitError() from exc
     except Exception as exc:  # noqa: BLE001 - surfaced as a clean HTTP error
-        logger.error("Groq review generation failed (request=%s, groq_calls=1): %s", request_id, exc)
-        raise GroqError(f"Review generation failed: {exc}") from exc
+        raise GroqError(f"Review generation failed: {exc}", _groq_failure_reason(exc)) from exc
 
     content = (response.choices[0].message.content or "").strip()
     if not content:
-        logger.error("Groq returned an empty review (request=%s, groq_calls=1)", request_id)
-        raise GroqError("Groq returned an empty review. Please try again.")
+        raise GroqError("Groq returned an empty review. Please try again.", "empty_response")
+    return content
+
+
+def _groq_failure_reason(exc: Exception) -> str | None:
+    """Fallback category for a failed Groq call, or None for errors Gemini
+    can't fix (bad key or request, unknown model, bugs in our code)."""
+    if isinstance(exc, APIConnectionError):  # includes APITimeoutError, DNS
+        return "transient"
+    status = getattr(exc, "status_code", None)  # groq.APIStatusError
+    if status == 408:
+        return "transient"
+    if isinstance(status, int) and status >= 500:
+        return "service_unavailable"
+    return None
+
+
+def _complete_gemini(prompt: str, request_id: str, model: str) -> str:
+    """The one Gemini fallback call, with the same system and user prompts."""
+    try:
+        client = genai.Client(
+            api_key=settings.gemini_api_key,
+            http_options=genai_types.HttpOptions(
+                timeout=int(GEMINI_TIMEOUT_SECONDS * 1000),
+                retry_options=genai_types.HttpRetryOptions(attempts=1),  # no SDK retries
+            ),
+        )
+        response = client.models.generate_content(
+            model=settings.gemini_model,
+            contents=prompt,
+            config=genai_types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+                # Temperature left at the Gemini default: Google advises
+                # against lowering it on thinking models.
+                max_output_tokens=GEMINI_MAX_TOKENS,
+                thinking_config=genai_types.ThinkingConfig(thinking_level=genai_types.ThinkingLevel.LOW),
+            ),
+        )
+        content = (response.text or "").strip()
+    except genai_errors.APIError as exc:
+        logger.error("Review failed: model=%s status=%s error=%s req=%s", model, exc.code, _short(exc.message or exc), request_id)
+        if exc.code == 429:
+            raise GroqRateLimitError(reason=None) from exc
+        raise GroqError(f"Review generation failed: {exc}") from exc
+    except Exception as exc:  # noqa: BLE001 - surfaced as a clean HTTP error
+        logger.error("Review failed: model=%s error=%s req=%s", model, _short(exc), request_id)
+        raise GroqError(f"Review generation failed: {exc}") from exc
+
+    if not content:
+        logger.error("Review failed: model=%s error=empty response req=%s", model, request_id)
+        raise GroqError("Review generation returned an empty review. Please try again.")
     return content
