@@ -145,6 +145,7 @@ TOPICS: dict[str, tuple[str, ...]] = {
         r"come back", r"coming back", r"came back", r"be back", r"go(?:ing)? back",
         r"went back", r"return\w*", r"visit\w* again", r"next time", r"again soon",
         r"(?:come|go|shop|be) (?:here |there )?again",
+        r"check (?:back|in again)", r"stop by again", r"drop by again", r"visit (?:soon|more often)",
     ),
     # Outcomes models like to claim for the customer.
     "claimed outcome": (

@@ -1,13 +1,15 @@
 """Review generation: a boutique review from a rating + experience.
 
-Groq is the primary provider. When its one call fails for a transient
-provider reason (rate limit, timeout, network, 5xx), Gemini gets ONE call with
-the same prompts. So a request makes at most two provider calls, and there
-are no retries, regeneration or LLM-based checking. The flow is::
+Each call asks for CANDIDATES alternative versions; the first that passes
+every local check is returned. Groq is the primary provider. Gemini gets ONE
+call with the same prompts when Groq fails for a transient provider reason
+(rate limit, timeout, network, 5xx) or when none of Groq's versions pass the
+checks. So a request makes at most two provider calls, and there are no
+retries or LLM-based checking. The flow is::
 
-    domain check (local) -> one Groq call [-> one Gemini call on a transient
-    Groq failure] -> local clean-up and checks (grounding, tone, coverage,
-    uniqueness) -> save -> return
+    domain check (local) -> one Groq call [-> one Gemini call] -> per version:
+    local clean-up and checks (grounding, tone, coverage, uniqueness) -> save
+    the first that passes -> return
 
 Variation comes from a length band and style notes picked locally for that
 one call. A review that fails the local checks is not regenerated; the API
@@ -16,6 +18,7 @@ returns a controlled error and the customer can press Regenerate themselves.
 
 from __future__ import annotations
 
+import json
 import logging
 import random
 import re
@@ -78,7 +81,7 @@ BUSY_MESSAGE = "Too many reviews are being generated right now. Please wait a mo
 FALLBACK_REASONS = frozenset({"rate_limited", "transient", "service_unavailable", "empty_response"})
 
 SYSTEM_PROMPT = f"""\
-You write one Google review for Kaur Threads, a fashion boutique, as the \
+You write Google reviews for Kaur Threads, a fashion boutique, as the \
 customer who gives you their star rating and experience. You are rewording \
 their experience, not inventing one.
 
@@ -132,8 +135,9 @@ exceeded my expectations, impeccable, curated, attention to detail).
 recommendation, the shop's name or a closing line. Stop once their points \
 are covered.
 
-FORMAT: plain text in one paragraph. No quotes, emojis, hashtags, bullets, \
-em dashes or semicolons. Output only the review.
+FORMAT: reply in JSON as {{"reviews": [...]}}, one string per version. Each \
+review is plain text in one paragraph. No quotes, emojis, hashtags, bullets, \
+labels, em dashes or semicolons.
 
 The user message ends with style notes for this one review. Follow them as \
 far as the facts allow. They never permit adding facts, and their words \
@@ -185,17 +189,33 @@ ORDERS = (
 )
 
 TEMPERATURE = 0.85
-MAX_TOKENS = 500  # ~100-word review plus low-effort reasoning
-GEMINI_MAX_TOKENS = 800  # Gemini counts its (low) thinking in this budget
-# The frontend aborts after 20s, so Groq + a Gemini fallback must both fit.
+# Versions requested per call. One invented sentence rejects a version, so
+# several independent versions make it very likely that one passes.
+CANDIDATES = 3
+MAX_TOKENS = 1000  # three ~100-word versions plus low-effort reasoning
+GEMINI_MAX_TOKENS = 1200  # Gemini counts its (low) thinking in this budget
+# The frontend aborts after 20s, so Groq + a Gemini call share one deadline:
+# Groq gets at most CALL_TIMEOUT_SECONDS, Gemini whatever time is left.
 CALL_TIMEOUT_SECONDS = 8.0
-GEMINI_TIMEOUT_SECONDS = 10.0
+REQUEST_BUDGET_SECONDS = 18.0
+MIN_GEMINI_SECONDS = 4.0  # less than this left: skip Gemini, it can't finish
 MAX_AVOID_IN_PROMPT = 6
 
 # Typography people don't type on a phone keyboard, swapped for what they do.
 _PLAIN_TYPOGRAPHY = str.maketrans({"‐": "-", "‑": "-", "‘": "'", "’": "'", "“": "", "”": "", '"': ""})
 _PREAMBLE_RE = re.compile(r"^\s*(?:here(?:'s| is)[^:\n]*:|review\s*:|sure[^:\n]*:)\s*", re.IGNORECASE)
 _BULLET_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+", re.MULTILINE)
+# Backup split when a reply isn't JSON: ###/---/*** lines or blank lines.
+_CANDIDATE_SPLIT_RE = re.compile(r"^\s*(?:#{3,}|-{3,}|\*{3,})\s*$|\n\s*\n", re.MULTILINE)
+_JSON_STRING_RE = re.compile(r'"((?:[^"\\]|\\.)*)"')
+# Both providers must answer {"reviews": [...]}, so versions never run together.
+REVIEWS_SCHEMA = {
+    "type": "object",
+    "properties": {"reviews": {"type": "array", "items": {"type": "string"}}},
+    "required": ["reviews"],
+    "additionalProperties": False,
+}
+_LABEL_RE = re.compile(r"^\s*(?:(?:version|review|option)\s*\d*\s*[:.)-]|\d+[.)])\s+", re.IGNORECASE)
 _EMOJI_RE = re.compile("[\U0001F000-\U0001FAFF☀-➿️]")
 _HASHTAG_RE = re.compile(r"#\w+")
 _FILLER_OPENER_RE = re.compile(r"^(?:honestly|so|well|okay|ok|wow|alright|overall),\s*", re.IGNORECASE)
@@ -253,18 +273,22 @@ def generate_review(rating: int, experience: str | None) -> str:
         rating, experience, plan, avoid_openings=avoid_openings, avoid_closings=avoid_closings
     )
     started = time.monotonic()
-    raw, model = _generate_raw(prompt, request_id)
+    deadline = started + REQUEST_BUDGET_SECONDS
+    raw, model = _generate_raw(prompt, request_id, deadline)
+    review, problem = _pick_review(raw, model, request_id, rating, experience, plan.max_words, key)
 
-    # Both providers' text goes through the same checks below.
-    if NOT_BOUTIQUE in raw:
-        logger.info("Review not generated: model=%s flagged off-topic input req=%s", model, request_id)
-        raise NotBoutiqueError(
-            "Please describe your experience with the boutique's clothes or services."
-        )
+    if problem and model.startswith("groq/") and settings.gemini_api_key:
+        # None of Groq's versions passed: Gemini's one call is the second chance.
+        gemini_model = f"gemini/{settings.gemini_model}"
+        logger.warning("Groq versions failed checks (%s), trying model=%s req=%s", problem, gemini_model, request_id)
+        try:
+            raw = _complete_gemini(prompt, request_id, gemini_model, deadline)
+        except GroqError:
+            pass  # already logged; the customer gets the rejection below
+        else:
+            model = gemini_model
+            review, problem = _pick_review(raw, model, request_id, rating, experience, plan.max_words, key)
 
-    review, problem = finalize_review(raw, rating, experience, plan.max_words)
-    if problem is None:
-        problem = _store(key, review)
     if problem:
         logger.warning("Review rejected: model=%s reason=%s req=%s", model, problem, request_id)
         raise ReviewRejectedError(
@@ -278,7 +302,49 @@ def generate_review(rating: int, experience: str | None) -> str:
     return review
 
 
-def _generate_raw(prompt: str, request_id: str) -> tuple[str, str]:
+def _pick_review(
+    raw: str, model: str, request_id: str, rating: int, experience: str | None,
+    max_words: int, key: tuple[int, str],
+) -> tuple[str, str | None]:
+    """Run each version through the local checks and save the first that
+    passes. Returns (review, None) or ("", problem of the last version)."""
+    # Either provider's text goes through exactly the same checks.
+    if NOT_BOUTIQUE in raw:
+        logger.info("Review not generated: model=%s flagged off-topic input req=%s", model, request_id)
+        raise NotBoutiqueError(
+            "Please describe your experience with the boutique's clothes or services."
+        )
+    problem = "it returned no review"
+    for candidate in split_candidates(raw):
+        review, problem = finalize_review(candidate, rating, experience, max_words)
+        if problem is None:
+            problem = _store(key, review)
+        if problem is None:
+            return review, None
+        logger.debug("Version rejected locally: %s", problem)
+    return "", problem
+
+
+def split_candidates(raw: str) -> list[str]:
+    """The model's alternative versions from its JSON reply. A reply cut off
+    mid-JSON keeps its complete versions; a plain-text reply is split on
+    separator or blank lines."""
+    text = raw.strip()
+    if text.startswith("{"):
+        try:
+            parts = json.loads(text).get("reviews", [])
+        except (ValueError, AttributeError):
+            # Truncated JSON: keep every fully closed string after "reviews".
+            body = text.split('"reviews"', 1)[-1]
+            parts = [json.loads(f'"{m}"') for m in _JSON_STRING_RE.findall(body)]
+        parts = [p for p in parts if isinstance(p, str)]
+    else:
+        parts = _CANDIDATE_SPLIT_RE.split(text)
+    parts = (_LABEL_RE.sub("", part).strip() for part in parts)
+    return [part for part in parts if part][:CANDIDATES]
+
+
+def _generate_raw(prompt: str, request_id: str, deadline: float) -> tuple[str, str]:
     """Groq once; on a fallback-eligible failure, Gemini once. Returns
     (raw text, "provider/model" label). Never more than two provider calls.
 
@@ -298,7 +364,7 @@ def _generate_raw(prompt: str, request_id: str) -> tuple[str, str]:
             raise
         gemini_model = f"gemini/{settings.gemini_model}"
         logger.warning("Groq failed (%s), falling back to model=%s req=%s", exc.reason, gemini_model, request_id)
-        return _complete_gemini(prompt, request_id, gemini_model), gemini_model
+        return _complete_gemini(prompt, request_id, gemini_model, deadline), gemini_model
     return raw, groq_model
 
 
@@ -376,7 +442,11 @@ def build_user_prompt(
         lines.append("- Don't start with: " + ", ".join(f"'{o}'" for o in avoid_openings[:MAX_AVOID_IN_PROMPT]))
     if avoid_closings:
         lines.append("- Don't end with: " + ", ".join(f"'...{c}'" for c in avoid_closings[:MAX_AVOID_IN_PROMPT]))
-    lines += ["", "Write the review now."]
+    lines += [
+        "",
+        f"Write {CANDIDATES} different versions of this review now, as JSON. Each one follows "
+        "every rule and style note above, with its own wording.",
+    ]
     return "\n".join(lines)
 
 
@@ -419,12 +489,35 @@ def finalize_review(
 
     if len(review.split()) < MIN_REVIEW_WORDS or len(kept) < MIN_REVIEW_SENTENCES:
         return review, "too little was left after removing unsupported sentences"
+    repeated = _repeated_word(review)
+    if repeated:
+        return review, f"it repeated '{repeated}' too often"
     if len(review.split()) > max_words:
         return review, f"it was longer than {max_words} words"
     missing = rules.missing_points(review, experience)
     if missing:
         return review, "it left out " + ", ".join(missing)
     return review, rules.rating_floor_problem(review, rating)
+
+
+# Common words that may appear often; any other word 3+ times reads as a
+# review repeating itself (or several versions run together).
+_REPEAT_OK = frozenset(
+    "the a an and but so or to of in on at for with was were is it its it's i i'm "
+    "me my we our they them this that there had have has be been very really just "
+    "too also all it's".split()
+)
+MAX_WORD_REPEATS = 2
+
+
+def _repeated_word(review: str) -> str | None:
+    counts: defaultdict[str, int] = defaultdict(int)
+    for word in re.findall(r"[a-z']+", review.lower()):
+        if word not in _REPEAT_OK and len(word) > 2:
+            counts[word] += 1
+            if counts[word] > MAX_WORD_REPEATS:
+                return word
+    return None
 
 
 def _recent_edges(key: tuple[int, str]) -> tuple[list[str], list[str]]:
@@ -457,6 +550,10 @@ def _complete(client: Groq, prompt: str, request_id: str) -> str:
             # openai/gpt-oss models are reasoning models; keep reasoning short
             # so the token budget is spent on the review, not deliberation.
             reasoning_effort="low",
+            response_format={
+                "type": "json_schema",
+                "json_schema": {"name": "reviews", "strict": True, "schema": REVIEWS_SCHEMA},
+            },
             timeout=CALL_TIMEOUT_SECONDS,
         )
     except RateLimitError as exc:
@@ -483,13 +580,18 @@ def _groq_failure_reason(exc: Exception) -> str | None:
     return None
 
 
-def _complete_gemini(prompt: str, request_id: str, model: str) -> str:
-    """The one Gemini fallback call, with the same system and user prompts."""
+def _complete_gemini(prompt: str, request_id: str, model: str, deadline: float) -> str:
+    """The one Gemini call, with the same system and user prompts, limited to
+    the time left before the request deadline."""
+    seconds_left = deadline - time.monotonic()
+    if seconds_left < MIN_GEMINI_SECONDS:
+        logger.error("Review failed: model=%s skipped, only %.1fs left req=%s", model, seconds_left, request_id)
+        raise GroqError("Review generation took too long. Please try again.")
     try:
         client = genai.Client(
             api_key=settings.gemini_api_key,
             http_options=genai_types.HttpOptions(
-                timeout=int(GEMINI_TIMEOUT_SECONDS * 1000),
+                timeout=int(seconds_left * 1000),
                 retry_options=genai_types.HttpRetryOptions(attempts=1),  # no SDK retries
             ),
         )
@@ -501,6 +603,8 @@ def _complete_gemini(prompt: str, request_id: str, model: str) -> str:
                 # Temperature left at the Gemini default: Google advises
                 # against lowering it on thinking models.
                 max_output_tokens=GEMINI_MAX_TOKENS,
+                response_mime_type="application/json",
+                response_json_schema=REVIEWS_SCHEMA,
                 thinking_config=genai_types.ThinkingConfig(thinking_level=genai_types.ThinkingLevel.LOW),
             ),
         )

@@ -3,6 +3,7 @@ reviews, rating-true tone, variable length and uniqueness."""
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import httpx
@@ -158,7 +159,7 @@ def test_model_settings_and_prompt(fake_groq):
     assert call["model"] == groq_client.settings.groq_model
     assert 0.8 <= call["temperature"] <= 0.9
     assert call["reasoning_effort"] == "low"
-    assert call["max_tokens"] <= 500
+    assert call["max_tokens"] <= 1000
     prompt = call["messages"][1]["content"]
     assert "Star rating: 4 out of 5" in prompt
     assert "<<<\nStaff helped me choose the design.\n>>>" in prompt
@@ -514,3 +515,97 @@ def test_gemini_cannot_return_a_duplicate_of_an_accepted_review(fake_groq, gemin
     assert _fallback(fake_groq, gemini, GOOD_REPLY).status_code == 200
     groq_timeout = APITimeoutError(request=httpx.Request("POST", "https://api.groq.com"))
     assert _fallback(fake_groq, gemini, groq_timeout, GOOD_REPLY).status_code == 409
+
+
+# --- Several versions per call ---------------------------------------------------
+
+V_INVENTED = "The collection was really good. Staff was friendly. Prices were fair."
+V_GOOD = "Nice collection here. Quality was good as well. Happy with my visit."
+
+
+def test_first_version_that_passes_is_returned(fake_groq):
+    reply = f"{V_INVENTED}\n###\n{V_GOOD}\n###\nLiked the collection. Quality was nice. That's about it."
+    response = _generate(fake_groq, 5, "Good collection and nice quality.", reply)
+    assert response.json()["review"] == V_GOOD
+
+
+def test_versions_are_split_cleanly():
+    raw = "Version 1: First one here. Two. Three.\n###\n\n2. Second one. Two. Three.\n ### \nThird. Two. Three.\n###\nFourth."
+    assert groq_client.split_candidates(raw) == ["First one here. Two. Three.", "Second one. Two. Three.", "Third. Two. Three."]
+    assert groq_client.split_candidates("Just one review. Two. Three.") == ["Just one review. Two. Three."]
+
+
+def test_duplicate_version_is_skipped_for_a_fresh_one(fake_groq):
+    assert _generate(fake_groq, 5, "Good collection and nice quality.", GOOD_REPLY).status_code == 200
+    fake_groq.calls = []
+    response = _generate(fake_groq, 5, "Good collection and nice quality.", f"{GOOD_REPLY}\n###\n{V_GOOD}")
+    assert response.json()["review"] == V_GOOD
+
+
+def test_prompt_asks_for_several_versions(fake_groq):
+    _generate(fake_groq, 5, "Good collection.", V_GOOD)
+    assert f"Write {groq_client.CANDIDATES} different versions" in fake_groq.calls[0]["messages"][1]["content"]
+
+
+def test_gemini_gets_one_call_when_no_groq_version_passes(fake_groq, gemini):
+    response = _fallback(fake_groq, gemini, f"{V_INVENTED}\n###\n{V_INVENTED}", f"{V_INVENTED}\n###\n{V_GOOD}")
+    assert response.json()["review"] == V_GOOD
+    assert len(fake_groq.calls) == 1 and len(gemini.calls) == 1
+    assert gemini.calls[0]["contents"] == fake_groq.calls[0]["messages"][1]["content"]  # same prompt
+
+
+def test_no_passing_version_anywhere_is_a_controlled_rejection(fake_groq, gemini):
+    response = _fallback(fake_groq, gemini, V_INVENTED, V_INVENTED)
+    assert response.status_code == 409
+    assert len(fake_groq.calls) == 1 and len(gemini.calls) == 1  # two calls at most, Groq not retried
+
+
+def test_gemini_outage_after_failed_checks_is_still_a_rejection(fake_groq, gemini):
+    outage = genai_errors.ServerError(503, {"error": {"message": "unavailable"}})
+    assert _fallback(fake_groq, gemini, V_INVENTED, outage).status_code == 409
+
+
+def test_off_topic_flag_does_not_use_the_second_chance(fake_groq, gemini):
+    assert _fallback(fake_groq, gemini, "NOT_BOUTIQUE", V_GOOD, experience="The yoga class was relaxing.").status_code == 400
+    assert gemini.calls == []
+
+
+def test_json_versions_are_parsed_and_both_providers_require_json(fake_groq, gemini):
+    reply = json.dumps({"reviews": [V_INVENTED, V_GOOD, GOOD_REPLY]})
+    assert _generate(fake_groq, 5, "Good collection and nice quality.", reply).json()["review"] == V_GOOD
+    assert fake_groq.calls[0]["response_format"]["json_schema"]["strict"] is True
+
+    fake_groq.calls = []
+    _fallback(fake_groq, gemini, RateLimitError("rate limited", response=_groq_response(429), body=None), json.dumps({"reviews": [GOOD_REPLY]}))
+    assert gemini.calls[0]["config"].response_mime_type == "application/json"
+    assert gemini.calls[0]["config"].response_json_schema == groq_client.REVIEWS_SCHEMA
+
+
+def test_cut_off_json_keeps_its_complete_versions():
+    raw = '{"reviews": ["First one. Two. Three.", "Second \\"quoted\\" one. Two. Three.", "Third one that got cu'
+    assert groq_client.split_candidates(raw) == ["First one. Two. Three.", 'Second "quoted" one. Two. Three.']
+
+
+def test_versions_run_together_are_rejected_not_returned():
+    merged = ("Nice! The quality was nice, which was reassuring. I left satisfied. Great! I was impressed by "
+              "the nice quality. The collection was good. Cool! The quality was nice.")
+    review, problem = _finalize(merged, 5, "Good collection and nice quality.")
+    assert problem is not None and "repeated" in problem
+
+
+@pytest.mark.parametrize("sentence", ["Will check back soon for more.", "I'll stop by again.", "Hope to visit soon."])
+def test_return_visit_plans_are_removed(sentence):
+    review, problem = _finalize(f"{GOOD_REPLY} {sentence}", 5, "Good collection and nice quality.")
+    assert problem is None and review == GOOD_REPLY
+
+
+def test_gemini_gets_the_time_left_and_is_skipped_when_too_little_remains(fake_groq, gemini, monkeypatch):
+    groq_429 = RateLimitError("rate limited", response=_groq_response(429), body=None)
+    _fallback(fake_groq, gemini, groq_429, GOOD_REPLY)
+    timeout_ms = gemini.client_kwargs["http_options"].timeout
+    assert (groq_client.REQUEST_BUDGET_SECONDS - 1) * 1000 < timeout_ms <= groq_client.REQUEST_BUDGET_SECONDS * 1000
+
+    gemini.calls = []
+    monkeypatch.setattr(groq_client, "REQUEST_BUDGET_SECONDS", groq_client.MIN_GEMINI_SECONDS - 1)
+    assert _fallback(fake_groq, gemini, groq_429, GOOD_REPLY).status_code == 502
+    assert gemini.calls == []  # no call that could only time out
