@@ -78,9 +78,9 @@ export default function GeneratedReview({
         </button>
 
         {googleConfigured && !loading ? (
-          // A real link, not a scripted redirect: phones only open Google's
-          // review box (in the Maps app or the browser) reliably from a tap
-          // on a link. The href/target differ per device (see googleReview.js).
+          // The click copies the review and shows the "what to do next" guide,
+          // which then opens this link (see App.jsx). The href/target differ
+          // per device (see googleReview.js).
           <a
             className="btn btn--primary"
             href={googleLink.href}
