@@ -922,39 +922,10 @@ img {
   font-weight: 600;
 }
 
-.post-guide__progress {
-  margin: 20px 0 0;
-}
-
-.post-guide__progress::before {
-  content: '';
-  display: block;
-  height: 6px;
-  border-radius: 999px;
-  background: rgba(18, 61, 53, 0.12);
-}
-
-.post-guide__bar {
-  display: block;
-  height: 6px;
-  margin-top: -6px;
-  border-radius: 999px;
-  background: var(--green);
-  transform-origin: left center;
-  animation: guide-progress linear both;
-}
-
-.post-guide__progress-label {
-  display: block;
-  margin-top: 8px;
-  font-size: 13px;
-  color: var(--muted);
-}
-
 .post-guide__actions {
   display: grid;
   gap: 6px;
-  margin-top: 18px;
+  margin-top: 20px;
 }
 
 .post-guide__retry {
@@ -979,15 +950,6 @@ img {
   from {
     opacity: 0;
     transform: translateY(16px) scale(0.96);
-  }
-}
-
-@keyframes guide-progress {
-  from {
-    transform: scaleX(0);
-  }
-  to {
-    transform: scaleX(1);
   }
 }
 

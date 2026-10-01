@@ -78,9 +78,9 @@ export default function GeneratedReview({
         </button>
 
         {googleConfigured && !loading ? (
-          // The click copies the review and shows the "what to do next" guide,
-          // which then opens this link (see App.jsx). The href/target differ
-          // per device (see googleReview.js).
+          // The click copies the review and shows the "what to do next" guide
+          // instead of navigating; the guide's own link opens Google (see
+          // App.jsx). The href stays so the button is still a real link.
           <a
             className="btn btn--primary"
             href={googleLink.href}

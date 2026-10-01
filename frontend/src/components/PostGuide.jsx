@@ -11,12 +11,14 @@ const STEPS = [
 // "Post on Google". Google's review box can't be pre-filled, so this makes
 // sure they know the review is on their clipboard and needs pasting.
 //
-// - copied: shown for `delay` ms with a progress bar, then the app opens
-//   Google. The "Open Google Reviews" link stays as a real-tap fallback in
-//   case the browser blocked the scripted open.
-// - manual: copying failed, so nothing opens on its own; the review is shown
-//   to copy by hand before the customer taps the link.
-export default function PostGuide({ status, redirected, delay, review, googleLink, onOpen, onClose }) {
+// Google opens only from a tap on the "Open Google Reviews" link: a real tap
+// on a link is what lets phones hand it to the Maps app or open it in the
+// browser straight on the review box. The href/target differ per device
+// (see googleReview.js).
+//
+// - copied: the review is on the clipboard, ready to paste.
+// - manual: copying failed, so the review is shown to copy by hand first.
+export default function PostGuide({ status, opened, review, googleLink, onOpen, onClose }) {
   const dialogRef = useRef(null)
 
   useEffect(() => {
@@ -34,7 +36,6 @@ export default function PostGuide({ status, redirected, delay, review, googleLin
   }, [onClose])
 
   const copied = status === 'copied'
-  const counting = copied && !redirected
 
   return (
     <div className="post-guide">
@@ -56,7 +57,7 @@ export default function PostGuide({ status, redirected, delay, review, googleLin
         </h2>
         <p id="post-guide-lead" className="post-guide__lead">
           {copied
-            ? 'Google Reviews is opening next. Here’s what to do there:'
+            ? 'Tap the button below to open Google Reviews, then:'
             : 'We couldn’t copy it automatically. Press and hold the text below, choose Select All, then Copy.'}
         </p>
 
@@ -85,15 +86,8 @@ export default function PostGuide({ status, redirected, delay, review, googleLin
           ))}
         </ol>
 
-        {counting && (
-          <div className="post-guide__progress" role="status">
-            <span className="post-guide__bar" style={{ animationDuration: `${delay}ms` }} />
-            <span className="post-guide__progress-label">Opening Google Reviews…</span>
-          </div>
-        )}
-
         <div className="post-guide__actions">
-          {redirected && <p className="post-guide__retry">Google didn’t open?</p>}
+          {opened && <p className="post-guide__retry">Google didn’t open? Tap again.</p>}
           <a
             className="btn btn--primary"
             href={googleLink.href}
@@ -102,10 +96,10 @@ export default function PostGuide({ status, redirected, delay, review, googleLin
             onClick={onOpen}
           >
             <GoogleIcon width="20" height="20" />
-            {counting ? 'Open now' : 'Open Google Reviews'}
+            Open Google Reviews
           </a>
           <button type="button" className="link-btn post-guide__close" onClick={onClose}>
-            {counting ? 'Cancel' : 'Done'}
+            {opened ? 'Done' : 'Close'}
           </button>
         </div>
       </div>

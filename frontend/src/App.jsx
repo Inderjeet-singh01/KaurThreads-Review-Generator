@@ -8,13 +8,11 @@ import ContactLinks from './components/ContactLinks.jsx'
 import PostGuide from './components/PostGuide.jsx'
 import { generateReview, GENERIC_ERROR, GOOGLE_REVIEW_URL, warmUpBackend } from './api.js'
 import { copyText } from './clipboard.js'
-import { googleReviewLink, openGoogleReview } from './googleReview.js'
+import { googleReviewLink } from './googleReview.js'
 
 const NO_RATING_ERROR = 'Please select a rating first.'
 const EMPTY_REVIEW_ERROR = 'Please generate or write your review first.'
 const MAX_COOLDOWN_SECONDS = 30
-// How long the "Review copied" guide shows before Google opens.
-const REDIRECT_DELAY_MS = 1800
 
 export default function App() {
   const [rating, setRating] = useState(0)
@@ -24,8 +22,8 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [postStatus, setPostStatus] = useState(null) // 'copied' | 'manual' | null
-  // The "what to do next" guide over the page; redirected once Google opened.
-  const [guide, setGuide] = useState(null) // { redirected: boolean } | null
+  // The "what to do next" guide over the page; opened once its Google link was tapped.
+  const [guide, setGuide] = useState(null) // { opened: boolean } | null
   // 'connecting' | 'waking' | 'generating' | 'retrying' while loading,
   // 'success' after a review arrives, '' otherwise.
   const [status, setStatus] = useState('')
@@ -37,15 +35,12 @@ export default function App() {
   // Set synchronously so a fast double click can't send a second request
   // before the disabled button re-renders: one click, one POST.
   const generatingRef = useRef(false)
-  const redirectTimerRef = useRef(null)
 
   // Wake the backend (Render may have put it to sleep) while the customer
   // is still choosing a rating, so Generate is usually instant.
   useEffect(() => {
     warmUpBackend()
   }, [])
-
-  useEffect(() => () => clearTimeout(redirectTimerRef.current), [])
 
   useEffect(() => {
     if (cooldown <= 0) return undefined
@@ -90,11 +85,10 @@ export default function App() {
     if (error === EMPTY_REVIEW_ERROR) setError('')
   }
 
-  // Runs on the "Post on Google" link's click. Google's review box can't be
-  // pre-filled, so the review is copied and a full-screen guide tells the
-  // customer to paste it, before Google opens. Copying happens right here in
-  // the tap, where browsers allow it; Google is opened from script once the
-  // guide has been read (see PostGuide for the fallback link).
+  // Runs on the "Post on Google" button's click. Google's review box can't be
+  // pre-filled, so the review is copied (here in the tap, where browsers
+  // allow it) and a full-screen guide explains the next steps. Google opens
+  // only when the customer taps the guide's own link (see PostGuide).
   function handlePostGoogle(event) {
     event.preventDefault()
     const text = review.trim() // current (possibly edited) review
@@ -120,29 +114,17 @@ export default function App() {
     }
   }
 
-  // Only a copied review opens Google on its own: with a failed copy the
-  // customer first needs to copy the review shown in the guide.
   function showGuide(result) {
-    clearTimeout(redirectTimerRef.current)
     setPostStatus(result)
-    setGuide({ redirected: false })
-    if (result !== 'copied') return
-    redirectTimerRef.current = setTimeout(() => {
-      openGoogleReview(googleLink)
-      setGuide((g) => g && { redirected: true })
-    }, REDIRECT_DELAY_MS)
+    setGuide({ opened: false })
   }
 
-  // The guide's own "Open Google Reviews" link was tapped.
+  // The guide's "Open Google Reviews" link was tapped; the link opens Google.
   function handleGuideOpen() {
-    clearTimeout(redirectTimerRef.current)
-    setGuide({ redirected: true })
+    setGuide({ opened: true })
   }
 
-  const handleGuideClose = useCallback(() => {
-    clearTimeout(redirectTimerRef.current)
-    setGuide(null)
-  }, [])
+  const handleGuideClose = useCallback(() => setGuide(null), [])
 
   function handleBack() {
     setPhase('form')
@@ -199,8 +181,7 @@ export default function App() {
       {guide && (
         <PostGuide
           status={postStatus}
-          redirected={guide.redirected}
-          delay={REDIRECT_DELAY_MS}
+          opened={guide.opened}
           review={review.trim()}
           googleLink={googleLink}
           onOpen={handleGuideOpen}

@@ -89,18 +89,3 @@ export function googleReviewLink(configured = GOOGLE_REVIEW_URL, platform = dete
   // New tab keeps this page open to copy the review from again.
   return { href: web, target: '_blank' }
 }
-
-// Opens the review link from script, after the "Review copied" guide has
-// been on screen. A browser may block a scripted new tab (Safari and Firefox
-// only allow one right after a tap); Google then opens in this tab instead.
-export function openGoogleReview({ href, target }) {
-  if (!href) return
-  if (target === '_blank') {
-    const tab = window.open(href, '_blank')
-    if (tab) {
-      tab.opener = null
-      return
-    }
-  }
-  window.location.href = href
-}
