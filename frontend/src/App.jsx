@@ -8,7 +8,7 @@ import ContactLinks from './components/ContactLinks.jsx'
 import PostGuide from './components/PostGuide.jsx'
 import { generateReview, GENERIC_ERROR, GOOGLE_REVIEW_URL, warmUpBackend } from './api.js'
 import { copyText } from './clipboard.js'
-import { googleReviewLink } from './googleReview.js'
+import { googleReviewLink, watchAppHandoff } from './googleReview.js'
 
 const NO_RATING_ERROR = 'Please select a rating first.'
 const EMPTY_REVIEW_ERROR = 'Please generate or write your review first.'
@@ -119,9 +119,11 @@ export default function App() {
     setGuide({ opened: false })
   }
 
-  // The guide's "Open Google Reviews" link was tapped; the link opens Google.
+  // The guide's "Open Google Reviews" link was tapped; the link itself opens
+  // Google. On Android, also watch for the Maps app not opening.
   function handleGuideOpen() {
     setGuide({ opened: true })
+    watchAppHandoff(googleLink)
   }
 
   const handleGuideClose = useCallback(() => setGuide(null), [])

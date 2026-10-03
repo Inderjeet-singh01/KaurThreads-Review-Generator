@@ -934,6 +934,13 @@ img {
   color: var(--muted);
 }
 
+.post-guide__browser {
+  justify-self: center;
+  margin-top: 6px;
+  font-size: 14px;
+  text-decoration: none;
+}
+
 .post-guide__close {
   justify-self: center;
   margin-top: 4px;

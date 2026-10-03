@@ -14,7 +14,8 @@ const STEPS = [
 // Google opens only from a tap on the "Open Google Reviews" link: a real tap
 // on a link is what lets phones hand it to the Maps app or open it in the
 // browser straight on the review box. The href/target differ per device
-// (see googleReview.js).
+// (see googleReview.js). On iPhone the page can't tell whether the Maps app
+// opened, so the browser's write-review page is also offered as its own link.
 //
 // - copied: the review is on the clipboard, ready to paste.
 // - manual: copying failed, so the review is shown to copy by hand first.
@@ -98,6 +99,17 @@ export default function PostGuide({ status, opened, review, googleLink, onOpen, 
             <GoogleIcon width="20" height="20" />
             Open Google Reviews
           </a>
+          {googleLink.offerBrowser && (
+            <a
+              className="link-btn post-guide__browser"
+              href={googleLink.browserUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={onOpen}
+            >
+              No Google Maps app? Open in your browser
+            </a>
+          )}
           <button type="button" className="link-btn post-guide__close" onClick={onClose}>
             {opened ? 'Done' : 'Close'}
           </button>
