@@ -13,7 +13,7 @@
   --white: #ffffff;
 
   --ink: #0f2622; /* headings — near-black green */
-  --green: #123d35; /* pill + CTA */
+  --green: #123d35; /* CTA */
   --green-deep: #0c3029;
   --text: #464a49; /* body copy */
   --text-soft: #545b5c;
@@ -166,44 +166,76 @@ img {
   margin-top: -8px;
 }
 
-.pill {
-  display: inline-flex;
+/* Instagram + phone: quiet line icons with a generous tap target. */
+.header-contact {
+  display: flex;
   align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 13px 0 11px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 400;
-  white-space: nowrap;
+  gap: 2px;
+  padding-right: 10px;
+  border-right: 1px solid var(--line);
+}
+
+.header-contact__link {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
   flex: 0 0 auto;
-  transition: transform 0.15s ease, box-shadow 0.2s ease;
+  border-radius: 50%;
+  color: var(--ink);
+  transition: color 0.2s ease, background 0.2s ease, transform 0.15s ease, opacity 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.pill__icon {
-  width: 13px;
-  height: 13px;
-  flex: 0 0 auto;
+.header-contact__icon {
+  width: 19px;
+  height: 19px;
 }
 
-.pill--love {
-  background: var(--green);
-  color: #f6f1e8;
-  box-shadow: 0 6px 14px -8px rgba(18, 61, 53, 0.6);
-}
-
-.pill--love .pill__icon {
-  color: var(--gold-light);
-}
-
-.pill--love:hover {
+.header-contact__link:hover {
+  color: var(--gold);
+  background: rgba(171, 116, 43, 0.08);
   transform: translateY(-1px);
-  box-shadow: 0 10px 20px -10px rgba(18, 61, 53, 0.6);
 }
 
-.pill--love:focus-visible {
-  outline: 2px solid var(--gold);
-  outline-offset: 2px;
+.header-contact__link:active {
+  transform: scale(0.93);
+  opacity: 0.75;
+}
+
+.header-contact__link:focus-visible {
+  outline: none;
+  color: var(--gold);
+  background: rgba(171, 116, 43, 0.08);
+  box-shadow: 0 0 0 2px var(--gold);
+}
+
+/* Small label on hover, only where a real pointer exists. */
+@media (hover: hover) and (pointer: fine) {
+  .header-contact__link::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 50%;
+    padding: 4px 9px;
+    border-radius: 6px;
+    background: var(--ink);
+    color: #f6f1e8;
+    font-size: 11px;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    transform: translate(-50%, -3px);
+    transition: opacity 0.15s ease, transform 0.15s ease;
+  }
+
+  .header-contact__link:hover::after,
+  .header-contact__link:focus-visible::after {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
 }
 
 .hamburger {
@@ -840,25 +872,25 @@ img {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 60px;
-  height: 60px;
+  width: 52px;
+  height: 52px;
   border-radius: 50%;
   background: var(--green);
   color: #fbf7f0;
-  box-shadow: 0 0 0 8px rgba(18, 61, 53, 0.1);
-  font-size: 30px;
+  box-shadow: 0 0 0 7px rgba(18, 61, 53, 0.1);
+  font-size: 26px;
   font-weight: 700;
 }
 
 .post-guide__badge--warn {
   background: var(--gold);
-  box-shadow: 0 0 0 8px rgba(171, 116, 43, 0.12);
+  box-shadow: 0 0 0 7px rgba(171, 116, 43, 0.12);
 }
 
 .post-guide__title {
-  margin: 18px 0 6px;
+  margin: 14px 0 4px;
   font-family: var(--serif);
-  font-size: 28px;
+  font-size: 27px;
   font-weight: 500;
   line-height: 1.15;
   color: var(--ink);
@@ -866,60 +898,191 @@ img {
 
 .post-guide__lead {
   margin: 0 0 18px;
-  font-size: 15px;
-  color: var(--text);
-}
-
-.post-guide__review {
-  margin: 0 0 16px;
-  font-size: 14px;
-  text-align: left;
-}
-
-.post-guide__steps {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 10px;
-  text-align: left;
-}
-
-.post-guide__step {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 12px 14px;
-  border-radius: 14px;
-  background: var(--bg);
-  border: 1px solid var(--line);
-  font-size: 15px;
-  color: var(--ink);
-}
-
-.post-guide__step strong {
-  display: block;
-  font-weight: 600;
-}
-
-.post-guide__step-text {
-  display: block;
-  font-size: 13px;
+  font-size: 14.5px;
   color: var(--text-soft);
 }
 
+.post-guide__review {
+  margin: 0;
+  font-size: 14px;
+  text-align: left;
+}
+
+/* Numbered steps under the demo (or the review, when copying failed). */
+.post-guide__steps {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.post-guide__step {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  font-size: 13.5px;
+  font-weight: 500;
+  line-height: 1.25;
+  color: var(--ink);
+}
+
+/* Connector from this step's number to the next one's. */
+.post-guide__step:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  top: 13px;
+  left: calc(50% + 20px);
+  width: calc(100% - 34px);
+  height: 1px;
+  background: var(--line);
+}
+
 .post-guide__num {
-  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 26px;
+  height: 26px;
   border-radius: 50%;
   background: var(--green);
   color: #fbf7f0;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
+}
+
+/* Mini Google review box. Every part rests on its finished look (stars
+   filled, review pasted, Post done); the animations below play from empty. */
+.paste-demo {
+  padding: 14px 14px 12px;
+  border-radius: 16px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  text-align: left;
+}
+
+.paste-demo__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 22px;
+}
+
+.paste-demo__g {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+}
+
+.paste-demo__stars {
+  position: relative;
+  display: inline-flex;
+}
+
+.paste-demo__stars-row {
+  display: flex;
+  gap: 4px;
+  color: #c9c1b6;
+}
+
+.paste-demo__stars-row svg {
+  width: 22px;
+  height: 22px;
+}
+
+.paste-demo__stars-row--filled {
+  position: absolute;
+  inset: 0;
+  color: var(--star);
+}
+
+.paste-demo__box {
+  position: relative;
+  min-height: 58px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  background: var(--white);
+  border: 1px solid var(--line);
+}
+
+.paste-demo__text {
+  margin: 0;
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.paste-demo__caret {
+  position: absolute;
+  left: 11px;
+  top: 11px;
+  width: 1.5px;
+  height: 17px;
+  background: #1a73e8;
+  opacity: 0;
+}
+
+.paste-demo__tap {
+  position: absolute;
+  left: 6px;
+  top: 6px;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: rgba(18, 61, 53, 0.18);
+  opacity: 0;
+}
+
+/* The phone's "Paste" bubble. */
+.paste-demo__callout {
+  position: absolute;
+  z-index: 1;
+  left: 4px;
+  top: -24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px 4px 8px;
+  border-radius: 8px;
+  background: var(--ink);
+  color: #fbf7f0;
+  font-size: 12px;
+  font-weight: 500;
+  box-shadow: 0 6px 14px -6px rgba(15, 38, 34, 0.5);
+  opacity: 0;
+}
+
+.paste-demo__callout svg {
+  width: 14px;
+  height: 14px;
+}
+
+.paste-demo__post {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: max-content;
+  margin: 10px 0 0 auto;
+  padding: 4px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--green);
+  background: var(--green);
+  color: #fbf7f0;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.paste-demo__post svg {
+  width: 14px;
+  height: 14px;
 }
 
 .post-guide__actions {
@@ -939,12 +1102,241 @@ img {
   margin-top: 6px;
   font-size: 14px;
   text-decoration: none;
+  white-space: normal;
 }
 
 .post-guide__close {
   justify-self: center;
   margin-top: 4px;
   font-size: 14px;
+}
+
+/* The demo plays twice, then rests on its finished look. Steps share one
+   duration and delay so the numbered steps highlight in sync with it. */
+@media (prefers-reduced-motion: no-preference) {
+  .post-guide__badge {
+    animation: guide-badge 0.45s 0.12s cubic-bezier(0.2, 0.9, 0.3, 1.3) both;
+  }
+
+  .paste-demo {
+    --demo: 5s ease 0.4s 2 both;
+  }
+
+  .paste-demo__stars-row--filled {
+    animation: demo-stars var(--demo);
+  }
+
+  .paste-demo__tap {
+    animation: demo-tap var(--demo);
+  }
+
+  .paste-demo__caret {
+    animation: demo-caret var(--demo);
+  }
+
+  .paste-demo__callout {
+    animation: demo-callout var(--demo);
+  }
+
+  .paste-demo__text {
+    animation: demo-text var(--demo);
+  }
+
+  .paste-demo__post {
+    animation: demo-post var(--demo);
+  }
+
+  .paste-demo__post svg {
+    animation: demo-post-check var(--demo);
+  }
+
+  .post-guide__steps--synced .post-guide__step:nth-child(1) .post-guide__num {
+    animation: demo-step-1 5s ease 0.4s 2 both;
+  }
+
+  .post-guide__steps--synced .post-guide__step:nth-child(2) .post-guide__num {
+    animation: demo-step-2 5s ease 0.4s 2 both;
+  }
+
+  .post-guide__steps--synced .post-guide__step:nth-child(3) .post-guide__num {
+    animation: demo-step-3 5s ease 0.4s 2 both;
+  }
+}
+
+@keyframes guide-badge {
+  from {
+    transform: scale(0.5);
+    opacity: 0;
+    box-shadow: 0 0 0 0 rgba(18, 61, 53, 0.25);
+  }
+}
+
+@keyframes demo-stars {
+  0%,
+  6% {
+    clip-path: inset(0 100% 0 0);
+    animation-timing-function: steps(5, end);
+  }
+  26%,
+  100% {
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+@keyframes demo-tap {
+  0%,
+  28% {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+  30% {
+    opacity: 1;
+  }
+  38%,
+  100% {
+    opacity: 0;
+    transform: scale(1.8);
+  }
+}
+
+@keyframes demo-caret {
+  0%,
+  30%,
+  37%,
+  41%,
+  49%,
+  100% {
+    opacity: 0;
+  }
+  31%,
+  36%,
+  42%,
+  48% {
+    opacity: 1;
+  }
+}
+
+@keyframes demo-callout {
+  0%,
+  34% {
+    opacity: 0;
+    transform: translateY(4px) scale(0.9);
+  }
+  38%,
+  44% {
+    opacity: 1;
+    transform: none;
+  }
+  46% {
+    opacity: 1;
+    transform: scale(0.92);
+  }
+  50%,
+  100% {
+    opacity: 0;
+    transform: none;
+  }
+}
+
+@keyframes demo-text {
+  0%,
+  49% {
+    opacity: 0;
+    transform: translateY(3px);
+    background: rgba(26, 115, 232, 0.14);
+  }
+  54% {
+    opacity: 1;
+    transform: none;
+    background: rgba(26, 115, 232, 0.14);
+  }
+  70%,
+  100% {
+    background: transparent;
+  }
+}
+
+@keyframes demo-post {
+  0%,
+  62% {
+    transform: none;
+    border-color: var(--line);
+    background: var(--white);
+    color: var(--muted);
+  }
+  66% {
+    transform: scale(0.9);
+    border-color: var(--line);
+    background: var(--white);
+    color: var(--muted);
+  }
+  70%,
+  100% {
+    transform: none;
+    border-color: var(--green);
+    background: var(--green);
+    color: #fbf7f0;
+  }
+}
+
+@keyframes demo-post-check {
+  0%,
+  68% {
+    opacity: 0;
+    width: 0;
+    margin-right: -4px;
+  }
+  74%,
+  100% {
+    opacity: 1;
+    width: 14px;
+    margin-right: 0;
+  }
+}
+
+@keyframes demo-step-1 {
+  0%,
+  4%,
+  28%,
+  100% {
+    background: var(--green);
+    box-shadow: 0 0 0 0 rgba(171, 116, 43, 0);
+  }
+  6%,
+  26% {
+    background: var(--gold);
+    box-shadow: 0 0 0 4px rgba(171, 116, 43, 0.2);
+  }
+}
+
+@keyframes demo-step-2 {
+  0%,
+  28%,
+  60%,
+  100% {
+    background: var(--green);
+    box-shadow: 0 0 0 0 rgba(171, 116, 43, 0);
+  }
+  30%,
+  58% {
+    background: var(--gold);
+    box-shadow: 0 0 0 4px rgba(171, 116, 43, 0.2);
+  }
+}
+
+@keyframes demo-step-3 {
+  0%,
+  60%,
+  94%,
+  100% {
+    background: var(--green);
+    box-shadow: 0 0 0 0 rgba(171, 116, 43, 0);
+  }
+  62%,
+  92% {
+    background: var(--gold);
+    box-shadow: 0 0 0 4px rgba(171, 116, 43, 0.2);
+  }
 }
 
 @keyframes guide-fade {
@@ -1244,13 +1636,23 @@ img {
     font-size: 18px;
   }
 
-  .pill {
-    padding: 0 11px;
-    font-size: 11px;
+  .header__actions {
+    gap: 8px;
   }
 
-  .header__actions {
-    gap: 10px;
+  .header-contact {
+    gap: 0;
+    padding-right: 6px;
+  }
+
+  .header-contact__link {
+    width: 36px;
+    height: 36px;
+  }
+
+  .header-contact__icon {
+    width: 18px;
+    height: 18px;
   }
 
   .card {
@@ -1278,15 +1680,19 @@ img {
     font-size: 10px;
   }
 
-  .pill {
-    height: 36px;
-    font-size: 14px;
-    padding: 0 18px 0 15px;
+  .header-contact {
+    gap: 6px;
+    padding-right: 14px;
   }
 
-  .pill__icon {
-    width: 15px;
-    height: 15px;
+  .header-contact__link {
+    width: 40px;
+    height: 40px;
+  }
+
+  .header-contact__icon {
+    width: 20px;
+    height: 20px;
   }
 
   .hamburger {
@@ -1455,16 +1861,9 @@ img {
     width: 36px;
   }
 
-  .pill {
-    height: 42px;
-    font-size: 15px;
-    padding: 0 22px 0 18px;
+  .header-contact {
     gap: 8px;
-  }
-
-  .pill__icon {
-    width: 17px;
-    height: 17px;
+    padding-right: 18px;
   }
 
   .header__actions {

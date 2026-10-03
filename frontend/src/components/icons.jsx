@@ -134,6 +134,18 @@ export function CheckIcon(props) {
   )
 }
 
+export function ClipboardIcon(props) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
+      <g stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round">
+        <path d="M8.5 4.5H6.5A1.5 1.5 0 005 6v13.5A1.5 1.5 0 006.5 21h11a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5h-2" />
+        <rect x="8.5" y="3" width="7" height="3.5" rx="1" />
+        <path d="M8.5 11.5h7 M8.5 15h4.5" />
+      </g>
+    </svg>
+  )
+}
+
 export function ArrowRightIcon(props) {
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
@@ -176,21 +188,25 @@ export function PhoneIcon(props) {
 }
 
 // Instagram glyph in its brand gradient — used only as a recognizable link icon.
-export function InstagramIcon(props) {
+// `mono` draws it as a quiet line icon in `currentColor` instead.
+export function InstagramIcon({ mono = false, ...props }) {
+  const paint = mono ? 'currentColor' : 'url(#ig-gradient)'
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
-      <defs>
-        <linearGradient id="ig-gradient" x1="3" y1="21" x2="21" y2="3" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stopColor="#f9ce34" />
-          <stop offset="0.5" stopColor="#ee2a7b" />
-          <stop offset="1" stopColor="#6228d7" />
-        </linearGradient>
-      </defs>
-      <g stroke="url(#ig-gradient)" strokeWidth="2.1">
+      {!mono && (
+        <defs>
+          <linearGradient id="ig-gradient" x1="3" y1="21" x2="21" y2="3" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stopColor="#f9ce34" />
+            <stop offset="0.5" stopColor="#ee2a7b" />
+            <stop offset="1" stopColor="#6228d7" />
+          </linearGradient>
+        </defs>
+      )}
+      <g stroke={paint} strokeWidth={mono ? 1.7 : 2.1}>
         <rect x="3" y="3" width="18" height="18" rx="5.4" />
         <circle cx="12" cy="12" r="4.1" />
       </g>
-      <circle cx="17.3" cy="6.7" r="1.25" fill="url(#ig-gradient)" />
+      <circle cx="17.3" cy="6.7" r="1.25" fill={paint} />
     </svg>
   )
 }

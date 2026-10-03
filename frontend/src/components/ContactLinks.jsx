@@ -1,7 +1,5 @@
+import { INSTAGRAM_URL, PHONE } from '../contact.js'
 import { ChevronRightIcon, InstagramIcon, PhoneIcon } from './icons.jsx'
-
-const INSTAGRAM_URL = 'https://www.instagram.com/kaur_threads?stkn=dGV3NzM1ZXk5ZDI%3D'
-const PHONE = '9876808614'
 
 export default function ContactLinks() {
   return (

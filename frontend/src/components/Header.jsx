@@ -1,5 +1,6 @@
 import { useEffect, useId, useState } from 'react'
-import { HeartIcon } from './icons.jsx'
+import { INSTAGRAM_URL, PHONE } from '../contact.js'
+import { InstagramIcon, PhoneIcon } from './icons.jsx'
 
 const NAV_ITEMS = ['Ethnic Wear', 'Suits', 'Lehengas', 'Dupattas', 'Our Story']
 
@@ -28,10 +29,26 @@ export default function Header() {
       </a>
 
       <div className="header__actions">
-        <a className="pill pill--love" href="#top">
-          <HeartIcon className="pill__icon" />
-          <span>Customer Love</span>
-        </a>
+        <div className="header-contact">
+          <a
+            className="header-contact__link"
+            href={INSTAGRAM_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Visit Kaur Threads on Instagram"
+            data-tooltip="Instagram"
+          >
+            <InstagramIcon className="header-contact__icon" mono />
+          </a>
+          <a
+            className="header-contact__link"
+            href={`tel:${PHONE}`}
+            aria-label="Call Kaur Threads"
+            data-tooltip="Call us"
+          >
+            <PhoneIcon className="header-contact__icon" />
+          </a>
+        </div>
 
         <button
           type="button"

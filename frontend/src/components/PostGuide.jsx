@@ -1,11 +1,7 @@
 import { useEffect, useRef } from 'react'
-import { CheckIcon, GoogleIcon } from './icons.jsx'
+import { CheckIcon, ClipboardIcon, GoogleIcon, StarIcon } from './icons.jsx'
 
-const STEPS = [
-  { title: 'Tap the stars', text: 'Choose your rating on Google.' },
-  { title: 'Paste your review', text: 'Tap the review box, then choose Paste.' },
-  { title: 'Tap Post', text: 'That’s it, thank you!' },
-]
+const STEPS = ['Choose stars', 'Paste review', 'Tap Post']
 
 // Full-screen "what to do next" sheet shown when the customer taps
 // "Post on Google". Google's review box can't be pre-filled, so this makes
@@ -17,7 +13,8 @@ const STEPS = [
 // (see googleReview.js). On iPhone the page can't tell whether the Maps app
 // opened, so the browser's write-review page is also offered as its own link.
 //
-// - copied: the review is on the clipboard, ready to paste.
+// - copied: the review is on the clipboard, ready to paste. A short looping
+//   demo of Google's review box shows the three steps (see PasteDemo).
 // - manual: copying failed, so the review is shown to copy by hand first.
 export default function PostGuide({ status, opened, review, googleLink, onOpen, onClose }) {
   const dialogRef = useRef(null)
@@ -50,19 +47,21 @@ export default function PostGuide({ status, opened, review, googleLink, onOpen, 
         tabIndex={-1}
       >
         <span className={`post-guide__badge${copied ? '' : ' post-guide__badge--warn'}`} aria-hidden="true">
-          {copied ? <CheckIcon width="30" height="30" /> : '!'}
+          {copied ? <CheckIcon width="28" height="28" /> : '!'}
         </span>
 
         <h2 id="post-guide-title" className="post-guide__title">
-          {copied ? 'Review copied!' : 'Copy your review first'}
+          {copied ? 'Review copied!' : 'Copy your review'}
         </h2>
         <p id="post-guide-lead" className="post-guide__lead">
           {copied
-            ? 'Tap the button below to open Google Reviews, then:'
-            : 'We couldn’t copy it automatically. Press and hold the text below, choose Select All, then Copy.'}
+            ? 'Just 3 quick steps on Google'
+            : 'We couldn’t copy it automatically. Press and hold the text, then Copy.'}
         </p>
 
-        {!copied && (
+        {copied ? (
+          <PasteDemo review={review} />
+        ) : (
           <textarea
             className="textarea post-guide__review"
             value={review}
@@ -73,16 +72,13 @@ export default function PostGuide({ status, opened, review, googleLink, onOpen, 
           />
         )}
 
-        <ol className="post-guide__steps">
+        <ol className={`post-guide__steps${copied ? ' post-guide__steps--synced' : ''}`}>
           {STEPS.map((step, i) => (
-            <li key={step.title} className="post-guide__step">
+            <li key={step} className="post-guide__step">
               <span className="post-guide__num" aria-hidden="true">
                 {i + 1}
               </span>
-              <span>
-                <strong>{step.title}</strong>
-                <span className="post-guide__step-text">{step.text}</span>
-              </span>
+              {step}
             </li>
           ))}
         </ol>
@@ -115,6 +111,47 @@ export default function PostGuide({ status, opened, review, googleLink, onOpen, 
           </button>
         </div>
       </div>
+    </div>
+  )
+}
+
+// Decorative mini version of Google's review box, played twice and then left
+// on its finished state: the stars fill, a "Paste" bubble drops the review
+// into the box, Post is tapped. The numbered steps below highlight in sync
+// and carry the same information as text.
+function PasteDemo({ review }) {
+  return (
+    <div className="paste-demo" aria-hidden="true">
+      <div className="paste-demo__head">
+        <GoogleIcon className="paste-demo__g" />
+        <span className="paste-demo__stars">
+          <span className="paste-demo__stars-row">
+            {[0, 1, 2, 3, 4].map((i) => (
+              <StarIcon key={i} />
+            ))}
+          </span>
+          <span className="paste-demo__stars-row paste-demo__stars-row--filled">
+            {[0, 1, 2, 3, 4].map((i) => (
+              <StarIcon key={i} filled />
+            ))}
+          </span>
+        </span>
+      </div>
+
+      <div className="paste-demo__box">
+        <span className="paste-demo__tap" />
+        <span className="paste-demo__callout">
+          <ClipboardIcon />
+          Paste
+        </span>
+        <span className="paste-demo__caret" />
+        <p className="paste-demo__text">“{review}”</p>
+      </div>
+
+      <span className="paste-demo__post">
+        <CheckIcon />
+        Post
+      </span>
     </div>
   )
 }
